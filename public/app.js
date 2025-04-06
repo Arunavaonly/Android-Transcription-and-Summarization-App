@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         
                         // Check permission status
                         const permissionStatus = await speechRecognitionPlugin.hasPermission();
-                        if (!permissionStatus.permission) {
+                        if (permissionStatus && !permissionStatus.permission) {
                             permissionMessage.classList.remove('hidden');
                         }
                         
@@ -58,6 +58,34 @@ document.addEventListener('DOMContentLoaded', async () => {
                             if (data && data.matches && data.matches.length > 0) {
                                 const finalResult = data.matches[0];
                                 addToTranscription(finalResult);
+                            }
+                        });
+
+                        // Add error listener
+                        speechRecognitionPlugin.addListener('error', (error) => {
+                            console.error('Speech recognition error:', error);
+                            if (isRecording) {
+                                // If we get "No match" error but we're supposed to be recording,
+                                // restart recording after a brief pause
+                                if (error.message === "No match") {
+                                    setTimeout(() => {
+                                        if (isRecording) {
+                                            console.log('Restarting speech recognition after No match error');
+                                            speechRecognitionPlugin.start({
+                                                language: 'en-US',
+                                                partialResults: true,
+                                                popup: false,
+                                                profanityFilter: false
+                                            }).catch(err => {
+                                                console.error('Error restarting speech recognition:', err);
+                                            });
+                                        }
+                                    }, 1000);
+                                } else {
+                                    isRecording = false;
+                                    updateUIForRecording(false);
+                                    showErrorMessage('Speech recognition error: ' + error.message);
+                                }
                             }
                         });
                     } catch (err) {
@@ -121,19 +149,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
             // Check and request permissions if needed
             const permissionStatus = await speechRecognitionPlugin.hasPermission();
-            if (!permissionStatus.permission) {
+            console.log('Permission status:', permissionStatus);
+            
+            // Safe check for undefined or false permission
+            if (!permissionStatus || permissionStatus.permission !== true) {
+                console.log('Requesting permission...');
+                // Show permission message instead of error
+                permissionMessage.classList.remove('hidden');
+                
                 const requestResult = await speechRecognitionPlugin.requestPermission();
-                if (!requestResult.permission) {
+                console.log('Permission request result:', requestResult);
+                
+                // Handle the case where requestResult.permission might be undefined
+                if (!requestResult || requestResult.permission !== true) {
+                    // This is shown only after user has explicitly denied permission
                     showErrorMessage('Microphone permission denied');
                     return;
                 }
+                // Hide permission message once granted
+                permissionMessage.classList.add('hidden');
             }
             
             // Start recording with the native plugin
             await speechRecognitionPlugin.start({
                 language: 'en-US',
                 partialResults: true,
-                popup: false
+                popup: false,
+                profanityFilter: false
             });
             
             // Update UI state
@@ -144,24 +186,39 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error('Start recording error:', err);
             isRecording = false;
             updateUIForRecording(false);
-            showErrorMessage('Could not start speech recognition: ' + err.message);
+            
+            // Don't show error if it's just a first-time permission request
+            const errorIsJustPermissionRequest = err.message && (
+                err.message.includes('permission') || 
+                err.message.includes('Permission')
+            );
+            
+            if (!errorIsJustPermissionRequest) {
+                showErrorMessage('Could not start speech recognition: ' + err.message);
+            }
         }
     }
     
     // Stop recording
     async function stopRecording() {
+        if (!isRecording) return;
+        
         isRecording = false;
         updateUIForRecording(false);
         
         try {
+            console.log('Stopping speech recognition');
             await speechRecognitionPlugin.stop();
+            console.log('Speech recognition stopped');
             
             // If we have meaningful transcript, process it
-            if (transcriptText.trim().length > 10) {
+            if (transcriptText && transcriptText.trim().length > 5) {
+                console.log(`Transcription complete: ${transcriptText.substring(0, 50)}... (length: ${transcriptText.length})`);
                 processingStatus.classList.remove('hidden');
                 sendTranscriptionForSummary(transcriptText);
             } else {
-                showErrorMessage('Recording too short. Please try again.');
+                console.warn('Transcription too short or empty:', transcriptText);
+                showErrorMessage('Recording too short or no speech detected. Please try again and speak clearly.');
             }
         } catch (err) {
             console.error('Stop recording error:', err);
@@ -219,21 +276,66 @@ document.addEventListener('DOMContentLoaded', async () => {
         recordButton.disabled = true;
         processingStatus.classList.remove('hidden');
         
+        console.log(`Sending text to API: ${text.substring(0, 50)}... (length: ${text.length})`);
+        console.log(`API URL: ${API_URL}`);
+        
         try {
+            // Check if we have valid text to send
+            if (!text || text.trim().length < 5) {
+                throw new Error('Text too short or empty');
+            }
+            
+            const requestData = { text };
+            console.log('Request payload:', requestData);
+            
             const res = await fetch(API_URL, {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                mode: 'cors',
-                body: JSON.stringify({ text })
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(requestData),
+                mode: 'cors'
             });
             
-            if (!res.ok) throw new Error(res.statusText || 'Server error');
+            console.log(`API response status: ${res.status}`);
             
-            const { summary } = await res.json();
-            summaryResult.textContent = summary || 'No summary generated';
+            if (!res.ok) {
+                let errorDetail = '';
+                try {
+                    const errorText = await res.text();
+                    errorDetail = errorText;
+                    console.error('API error response:', errorText);
+                } catch (e) {
+                    errorDetail = 'Unable to get error details';
+                }
+                
+                if (res.status === 0 || res.status === 403) {
+                    throw new Error('CORS error - API server may be blocking requests from this app');
+                } else {
+                    throw new Error(res.statusText || `Server error (${res.status}): ${errorDetail}`);
+                }
+            }
+            
+            let data;
+            try {
+                data = await res.json();
+                console.log('API response data:', data);
+            } catch (e) {
+                console.error('Error parsing API response as JSON:', e);
+                throw new Error('Invalid response from server (not JSON)');
+            }
+            
+            if (data && data.summary) {
+                summaryResult.textContent = data.summary;
+            } else {
+                summaryResult.textContent = 'No summary returned from API';
+                console.error('No summary in API response', data);
+            }
         } catch (err) {
-            console.error(err);
+            console.error('API call error:', err);
             summaryResult.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+            showErrorMessage(`Summary API error: ${err.message}`);
         } finally {
             processingStatus.classList.add('hidden');
             recordButton.disabled = false;

@@ -115,6 +115,27 @@ header p {
     gap: 8px;
 }
 
+#permissionMessage {
+    background-color: #f39c12;
+    color: white;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-top: 16px;
+    text-align: center;
+    font-weight: 500;
+    animation: attention 2s infinite;
+}
+
+#permissionMessage i {
+    margin-right: 8px;
+}
+
+@keyframes attention {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
+
 .hidden {
     display: none;
 }

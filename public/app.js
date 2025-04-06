@@ -26,7 +26,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     let capacitorAvailable = false;
     let recordingInterval = null;
     let recordingStartTime = null;
-    let permissionsChecked = false;
 
     // Initialize Capacitor plugins
     async function initCapacitor() {
@@ -39,8 +38,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('HTTP plugin found');
                     
-                    // Don't setup recorder here - we'll do it when the user clicks record
-                    console.log('App initialization complete, waiting for user interaction');
+                    // Setup audio recorder once HTTP plugin is confirmed
+                    setupAudioRecorder();
                 } else {
                     console.error('HTTP plugin not found in Capacitor.Plugins');
                     showErrorMessage('HTTP plugin not found - required for API calls');
@@ -55,87 +54,64 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // Check and request permissions explicitly
-    async function checkMicrophonePermission() {
-        // Skip if already checked
-        if (permissionsChecked) return true;
-        
-        try {
-            // Check if we have the Permissions plugin
-            if (window.Capacitor.Plugins.Permissions) {
-                console.log('Checking microphone permission');
-                
-                const permissionState = await window.Capacitor.Plugins.Permissions.query({
-                    name: 'microphone'
-                });
-                
-                console.log('Permission state:', permissionState.state);
-                
-                if (permissionState.state !== 'granted') {
-                    console.log('Requesting microphone permission');
-                    const requestResult = await window.Capacitor.Plugins.Permissions.request({
-                        name: 'microphone'
-                    });
-                    
-                    if (requestResult.state !== 'granted') {
-                        console.error('Microphone permission denied');
-                        showErrorMessage('Microphone access is required for recording.');
-                        permissionMessage.classList.remove('hidden');
-                        return false;
-                    }
-                }
-                
-                permissionsChecked = true;
-                return true;
-            } else {
-                // Fallback to mediaDevices API for permission
-                console.log('Permissions plugin not available, using mediaDevices API');
-                return true;
-            }
-        } catch (err) {
-            console.error('Error checking permissions:', err);
-            showErrorMessage('Could not verify microphone permissions: ' + err.message);
-            return false;
-        }
-    }
-    
     // Setup the audio recorder
-    async function setupAudioRecorder() {
-        if (audioRecorder) {
-            console.log('Audio recorder already set up');
-            return true;
-        }
-        
+    function setupAudioRecorder() {
         try {
-            console.log('Setting up audio recorder');
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            
-            const AudioContext = window.AudioContext || window.webkitAudioContext;
-            const audioContext = new AudioContext();
-            const audioStreamSource = audioContext.createMediaStreamSource(stream);
-            
-            // Create media recorder
-            audioRecorder = new MediaRecorder(stream);
-            audioRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0) {
-                    audioChunks.push(event.data);
-                }
-            };
-            
-            // Handle recording stopped
-            audioRecorder.onstop = async () => {
-                // Process the audio chunks here
-                if (audioChunks.length > 0) {
-                    await processAudioForTranscription();
-                }
-            };
-            
-            console.log('Audio recorder successfully set up');
-            return true;
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    // Try to use a specific mime type that works well with Google Speech API
+                    let mimeType = 'audio/webm;codecs=opus';
+                    let options = {};
+                    
+                    // Check if the browser supports this mime type
+                    if (MediaRecorder.isTypeSupported(mimeType)) {
+                        options = { mimeType: mimeType };
+                        console.log('Using WEBM_OPUS encoding');
+                    } else {
+                        // Fallback options in order of preference
+                        const fallbackMimeTypes = [
+                            'audio/webm',
+                            'audio/mp4',
+                            'audio/ogg;codecs=opus',
+                            'audio/wav'
+                        ];
+                        
+                        for (const type of fallbackMimeTypes) {
+                            if (MediaRecorder.isTypeSupported(type)) {
+                                mimeType = type;
+                                options = { mimeType: type };
+                                console.log('Using fallback encoding:', type);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Create recorder with selected options or default if none work
+                    audioRecorder = new MediaRecorder(stream, options);
+                    console.log('MediaRecorder initialized with mime type:', audioRecorder.mimeType);
+                    
+                    audioRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    // Handle recording stopped
+                    audioRecorder.onstop = async () => {
+                        // Process the audio chunks here
+                        if (audioChunks.length > 0) {
+                            await processAudioForTranscription();
+                        }
+                    };
+                })
+                .catch(err => {
+                    console.error('Error accessing audio stream:', err);
+                    showErrorMessage('Microphone access denied: ' + err.message);
+                    permissionMessage.classList.remove('hidden');
+                });
         } catch (err) {
             console.error('Error setting up audio recorder:', err);
             showErrorMessage('Could not set up audio recording: ' + err.message);
-            return false;
         }
     }
     
@@ -143,13 +119,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function processAudioForTranscription() {
         try {
             // Create blob from audio chunks
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            const audioBlob = new Blob(audioChunks, { type: audioRecorder.mimeType });
+            console.log('Created audio blob with type:', audioRecorder.mimeType);
             
             // Convert to base64
             const base64Audio = await blobToBase64(audioBlob);
             
             // Send to Google Cloud Speech-to-Text API
-            const transcription = await sendAudioToGoogleSpeech(base64Audio);
+            const transcription = await sendAudioToGoogleSpeech(base64Audio, audioRecorder.mimeType);
             
             // Update the UI with the transcription
             if (transcription && transcription.trim().length > 0) {
@@ -185,13 +162,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // Send audio to Google Cloud Speech-to-Text API
-    async function sendAudioToGoogleSpeech(base64Audio) {
+    async function sendAudioToGoogleSpeech(base64Audio, mimeType) {
         try {
+            // Determine encoding based on mimeType
+            let encoding = 'WEBM_OPUS'; // Default
+            let sampleRateHertz = 48000; // Default for most web recordings
+            
+            // Map MIME types to Google Speech API encodings
+            if (mimeType) {
+                const lowerMimeType = mimeType.toLowerCase();
+                if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
+                    encoding = 'WEBM_OPUS';
+                } else if (lowerMimeType.includes('webm')) {
+                    encoding = 'WEBM';
+                } else if (lowerMimeType.includes('ogg') && lowerMimeType.includes('opus')) {
+                    encoding = 'OGG_OPUS';
+                } else if (lowerMimeType.includes('mp4') || lowerMimeType.includes('mpeg')) {
+                    encoding = 'MP3';
+                } else if (lowerMimeType.includes('wav') || lowerMimeType.includes('linear')) {
+                    encoding = 'LINEAR16';
+                    sampleRateHertz = 16000; // Typical for LINEAR16
+                }
+            }
+            
+            console.log('Using encoding for Google Speech API:', encoding);
+            
             // Prepare the request payload
             const requestData = {
                 config: {
-                    encoding: 'WEBM_OPUS',
-                    sampleRateHertz: 48000,
+                    encoding: encoding,
+                    sampleRateHertz: sampleRateHertz,
                     languageCode: 'en-US',
                     model: 'default',
                     enableAutomaticPunctuation: true,
@@ -250,39 +250,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         
+        if (!audioRecorder) {
+            showErrorMessage('Audio recorder not initialized properly.');
+            return;
+        }
+        
         if (recordButton.hasAttribute('data-processing')) return;
         recordButton.setAttribute('data-processing', '');
         
-        try {
-            if (isRecording) {
-                await stopRecording();
-            } else {
-                // First check permissions and setup recorder
-                const hasPermission = await checkMicrophonePermission();
-                if (!hasPermission) {
-                    console.error('Permission check failed');
-                    showErrorMessage('Microphone permission is required.');
-                    return;
-                }
-                
-                // Then setup the recorder if it's not already set up
-                if (!audioRecorder) {
-                    const setupSuccess = await setupAudioRecorder();
-                    if (!setupSuccess) {
-                        console.error('Setup failed');
-                        showErrorMessage('Failed to initialize audio recorder.');
-                        return;
-                    }
-                }
-                
-                await startRecording();
-            }
-        } catch (err) {
-            console.error('Toggle recording error:', err);
-            showErrorMessage('Error toggling recording: ' + err.message);
-        } finally {
-            setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
+        if (isRecording) {
+            await stopRecording();
+        } else {
+            await startRecording();
         }
+        
+        setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
     }
     
     // Start recording
@@ -313,7 +295,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 recordingStatus.textContent = `Recording... ${minutes}:${seconds.toString().padStart(2, '0')}`;
             }, 1000);
             
-            console.log('Recording started successfully');
         } catch (err) {
             console.error('Start recording error:', err);
             isRecording = false;

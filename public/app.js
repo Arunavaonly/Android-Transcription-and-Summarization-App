@@ -149,31 +149,21 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Check and request permissions if needed
             const permissionStatus = await speechRecognitionPlugin.hasPermission();
             console.log('Permission status:', permissionStatus);
-            
-            // Safe check for undefined or false permission
-            if (!permissionStatus || permissionStatus.permission !== true) {
-                console.log('Requesting permission...');
-                // Show permission message instead of error
+
+            const hasPerm = permissionStatus?.permission === true;
+            if (!hasPerm) {
+                console.log('Requesting microphone permission...');
                 permissionMessage.classList.remove('hidden');
-                
-                const requestResult = await speechRecognitionPlugin.requestPermission();
-                console.log('Permission request result:', requestResult);
-                
-                // Handle the case where requestResult.permission might be undefined
-                if (!requestResult || requestResult.permission !== true) {
-                    // This is shown only after user has explicitly denied permission
-                    showErrorMessage('Microphone permission denied');
-                    return;
-                }
-                // Hide permission message once granted
+                // On Android this returns void, so we don’t inspect the return value
+                await speechRecognitionPlugin.requestPermission();
                 permissionMessage.classList.add('hidden');
-            }
+        }
+
             
             // Start recording with the native plugin
             await speechRecognitionPlugin.start({
                 language: 'en-US',
                 partialResults: true,
-                popup: false,
                 profanityFilter: false
             });
             

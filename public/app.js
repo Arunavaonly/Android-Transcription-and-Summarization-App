@@ -20,12 +20,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // App state
     let isRecording = false;
-    let audioRecorder = null;
-    let audioChunks = [];
     let transcriptText = '';
     let capacitorAvailable = false;
     let recordingInterval = null;
     let recordingStartTime = null;
+    let voiceRecorderAvailable = false;
 
     // Initialize Capacitor plugins
     async function initCapacitor() {
@@ -34,12 +33,23 @@ document.addEventListener('DOMContentLoaded', async () => {
                 capacitorAvailable = true;
                 console.log('Capacitor is available on native platform');
                 
-                // Check if HTTP plugin is available - using the community HTTP plugin
+                // Check for required plugins
                 if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('HTTP plugin found');
                     
-                    // Setup audio recorder once HTTP plugin is confirmed
-                    setupAudioRecorder();
+                    // Check for Voice Recorder plugin
+                    if (typeof VoiceRecorder !== 'undefined') {
+                        voiceRecorderAvailable = true;
+                        console.log('Voice Recorder plugin found');
+                        
+                        // Check for permission
+                        await checkMicrophonePermission();
+                    } else {
+                        console.error('Voice Recorder plugin not found');
+                        showErrorMessage('Voice Recorder plugin not found - required for audio recording');
+                    }
+                    
+                    console.log('App initialization complete');
                 } else {
                     console.error('HTTP plugin not found in Capacitor.Plugins');
                     showErrorMessage('HTTP plugin not found - required for API calls');
@@ -54,79 +64,52 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // Setup the audio recorder
-    function setupAudioRecorder() {
+    // Check and request microphone permission
+    async function checkMicrophonePermission() {
         try {
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(stream => {
-                    // Try to use a specific mime type that works well with Google Speech API
-                    let mimeType = 'audio/webm;codecs=opus';
-                    let options = {};
-                    
-                    // Check if the browser supports this mime type
-                    if (MediaRecorder.isTypeSupported(mimeType)) {
-                        options = { mimeType: mimeType };
-                        console.log('Using WEBM_OPUS encoding');
-                    } else {
-                        // Fallback options in order of preference
-                        const fallbackMimeTypes = [
-                            'audio/webm',
-                            'audio/mp4',
-                            'audio/ogg;codecs=opus',
-                            'audio/wav'
-                        ];
-                        
-                        for (const type of fallbackMimeTypes) {
-                            if (MediaRecorder.isTypeSupported(type)) {
-                                mimeType = type;
-                                options = { mimeType: type };
-                                console.log('Using fallback encoding:', type);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Create recorder with selected options or default if none work
-                    audioRecorder = new MediaRecorder(stream, options);
-                    console.log('MediaRecorder initialized with mime type:', audioRecorder.mimeType);
-                    
-                    audioRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            audioChunks.push(event.data);
-                        }
-                    };
-                    
-                    // Handle recording stopped
-                    audioRecorder.onstop = async () => {
-                        // Process the audio chunks here
-                        if (audioChunks.length > 0) {
-                            await processAudioForTranscription();
-                        }
-                    };
-                })
-                .catch(err => {
-                    console.error('Error accessing audio stream:', err);
-                    showErrorMessage('Microphone access denied: ' + err.message);
-                    permissionMessage.classList.remove('hidden');
-                });
+            console.log('Checking microphone permission');
+            const permResult = await VoiceRecorder.hasAudioRecordingPermission();
+            
+            if (!permResult.value) {
+                console.log('Requesting microphone permission');
+                permissionMessage.classList.remove('hidden');
+                
+                const requestResult = await VoiceRecorder.requestAudioRecordingPermission();
+                if (!requestResult.value) {
+                    console.error('Microphone permission denied');
+                    showErrorMessage('Microphone access is required for recording.');
+                    return false;
+                }
+                
+                permissionMessage.classList.add('hidden');
+            }
+            
+            console.log('Microphone permission granted');
+            return true;
         } catch (err) {
-            console.error('Error setting up audio recorder:', err);
-            showErrorMessage('Could not set up audio recording: ' + err.message);
+            console.error('Error checking/requesting microphone permission:', err);
+            showErrorMessage('Error accessing microphone: ' + err.message);
+            return false;
         }
     }
     
     // Process recorded audio and send for transcription
-    async function processAudioForTranscription() {
+    async function processAudioForTranscription(recordResult) {
         try {
-            // Create blob from audio chunks
-            const audioBlob = new Blob(audioChunks, { type: audioRecorder.mimeType });
-            console.log('Created audio blob with type:', audioRecorder.mimeType);
+            if (!recordResult || !recordResult.value || !recordResult.value.recordDataBase64) {
+                throw new Error('No recording data available');
+            }
             
-            // Convert to base64
-            const base64Audio = await blobToBase64(audioBlob);
+            // Get the base64 audio data
+            const base64Audio = recordResult.value.recordDataBase64;
+            console.log('Received audio recording, size:', base64Audio.length);
+            
+            // Get the mime type
+            const mimeType = recordResult.value.mimeType || 'audio/wav'; // Default to WAV if not provided
+            console.log('Recording mime type:', mimeType);
             
             // Send to Google Cloud Speech-to-Text API
-            const transcription = await sendAudioToGoogleSpeech(base64Audio, audioRecorder.mimeType);
+            const transcription = await sendAudioToGoogleSpeech(base64Audio, mimeType);
             
             // Update the UI with the transcription
             if (transcription && transcription.trim().length > 0) {
@@ -142,50 +125,39 @@ document.addEventListener('DOMContentLoaded', async () => {
             showErrorMessage('Error transcribing audio: ' + err.message);
         } finally {
             // Reset recording state
-            audioChunks = [];
             processingStatus.classList.add('hidden');
         }
-    }
-    
-    // Convert Blob to Base64
-    function blobToBase64(blob) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
-                const base64String = reader.result.split(',')[1];
-                resolve(base64String);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-        });
     }
     
     // Send audio to Google Cloud Speech-to-Text API
     async function sendAudioToGoogleSpeech(base64Audio, mimeType) {
         try {
             // Determine encoding based on mimeType
-            let encoding = 'WEBM_OPUS'; // Default
-            let sampleRateHertz = 48000; // Default for most web recordings
+            let encoding = 'LINEAR16'; // Default for native voice recorder
+            let sampleRateHertz = 16000; // Default for most native recordings
             
             // Map MIME types to Google Speech API encodings
             if (mimeType) {
                 const lowerMimeType = mimeType.toLowerCase();
-                if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
-                    encoding = 'WEBM_OPUS';
-                } else if (lowerMimeType.includes('webm')) {
-                    encoding = 'WEBM';
-                } else if (lowerMimeType.includes('ogg') && lowerMimeType.includes('opus')) {
-                    encoding = 'OGG_OPUS';
+                if (lowerMimeType.includes('wav')) {
+                    encoding = 'LINEAR16';
+                    sampleRateHertz = 16000;
                 } else if (lowerMimeType.includes('mp4') || lowerMimeType.includes('mpeg')) {
                     encoding = 'MP3';
-                } else if (lowerMimeType.includes('wav') || lowerMimeType.includes('linear')) {
-                    encoding = 'LINEAR16';
-                    sampleRateHertz = 16000; // Typical for LINEAR16
+                    sampleRateHertz = 16000;
+                } else if (lowerMimeType.includes('aac')) {
+                    encoding = 'AMR';
+                    sampleRateHertz = 8000;
+                } else if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
+                    encoding = 'WEBM_OPUS';
+                    sampleRateHertz = 48000;
+                } else if (lowerMimeType.includes('ogg')) {
+                    encoding = 'OGG_OPUS';
+                    sampleRateHertz = 48000;
                 }
             }
             
-            console.log('Using encoding for Google Speech API:', encoding);
+            console.log('Using encoding for Google Speech API:', encoding, 'with sample rate:', sampleRateHertz);
             
             // Prepare the request payload
             const requestData = {
@@ -195,6 +167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     languageCode: 'en-US',
                     model: 'default',
                     enableAutomaticPunctuation: true,
+                    useEnhanced: true, // Use enhanced model for better results
                 },
                 audio: {
                     content: base64Audio
@@ -210,9 +183,13 @@ document.addEventListener('DOMContentLoaded', async () => {
                 data: JSON.stringify(requestData)
             };
             
+            // Add timeout for request
+            console.log('Sending audio to Google Speech API...');
             const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                 method: 'POST',
-                ...options
+                ...options,
+                connectTimeout: 30, // 30 seconds timeout
+                readTimeout: 30
             });
             
             // Parse the response
@@ -220,9 +197,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const data = JSON.parse(response.data);
                 if (data && data.results && data.results.length > 0) {
                     // Combine all transcriptions
-                    return data.results
+                    const transcript = data.results
                         .map(result => result.alternatives[0].transcript)
                         .join(' ');
+                    console.log('Received transcription:', transcript.substring(0, 50) + '...');
+                    return transcript;
                 } else {
                     console.warn('No transcription results in API response');
                     return '';
@@ -233,6 +212,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } catch (err) {
             console.error('Error sending audio to Google Speech API:', err);
+            // If the error is related to the API key or authentication
+            if (err.message && err.message.includes('API key')) {
+                throw new Error('Invalid or missing API key. Please check api-config.js file.');
+            }
             throw err;
         }
     }
@@ -250,21 +233,35 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         
-        if (!audioRecorder) {
-            showErrorMessage('Audio recorder not initialized properly.');
+        if (!voiceRecorderAvailable) {
+            showErrorMessage('Voice recorder plugin not available.');
             return;
         }
         
         if (recordButton.hasAttribute('data-processing')) return;
         recordButton.setAttribute('data-processing', '');
         
-        if (isRecording) {
-            await stopRecording();
-        } else {
-            await startRecording();
+        try {
+            if (isRecording) {
+                await stopRecording();
+            } else {
+                // First check permission
+                const hasPermission = await checkMicrophonePermission();
+                if (!hasPermission) {
+                    console.error('Permission check failed');
+                    showErrorMessage('Microphone permission is required.');
+                    recordButton.removeAttribute('data-processing');
+                    return;
+                }
+                
+                await startRecording();
+            }
+        } catch (err) {
+            console.error('Toggle recording error:', err);
+            showErrorMessage('Error toggling recording: ' + err.message);
+        } finally {
+            setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
         }
-        
-        setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
     }
     
     // Start recording
@@ -274,13 +271,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // Reset transcript and UI
         transcriptText = '';
-        audioChunks = [];
         transcriptionResult.textContent = 'Listening...';
         summaryResult.textContent = 'Your summary will appear here';
         
         try {
-            // Start recording
-            audioRecorder.start(1000); // Collect data every second
+            // Start recording using the Voice Recorder plugin
+            console.log('Starting voice recording...');
+            await VoiceRecorder.startRecording();
             recordingStartTime = Date.now();
             
             // Start recording indicator
@@ -295,6 +292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 recordingStatus.textContent = `Recording... ${minutes}:${seconds.toString().padStart(2, '0')}`;
             }, 1000);
             
+            console.log('Recording started successfully');
         } catch (err) {
             console.error('Start recording error:', err);
             isRecording = false;
@@ -318,9 +316,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         try {
-            console.log('Stopping audio recording');
-            audioRecorder.stop();
-            console.log('Audio recording stopped, processing...');
+            console.log('Stopping voice recording...');
+            const recordResult = await VoiceRecorder.stopRecording();
+            console.log('Voice recording stopped');
+            
+            // Process the recording result
+            await processAudioForTranscription(recordResult);
         } catch (err) {
             console.error('Stop recording error:', err);
             processingStatus.classList.add('hidden');
@@ -384,7 +385,9 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                data: JSON.stringify(requestData)
+                data: JSON.stringify(requestData),
+                connectTimeout: 30,
+                readTimeout: 30
             });
             
             console.log(`API response status: ${response.status}`);

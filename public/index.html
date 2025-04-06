@@ -51,10 +51,23 @@
     <script src="capacitor.js"></script>
     <!-- Plugin scripts will be automatically added during capacitor sync -->
     
-    <!-- API Configuration -->
+    <!-- API Configuration - must be loaded before app.js -->
     <script src="api-config.js"></script>
     
-    <!-- Main Application Logic -->
+    <!-- Voice Recorder Plugin load check -->
+    <script>
+        document.addEventListener('capacitorReady', function() {
+            // Log when Capacitor is fully ready
+            console.log('Capacitor runtime is ready');
+            
+            // Check if we're on a native platform
+            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+                console.log('Running on native platform:', window.Capacitor.getPlatform());
+            }
+        });
+    </script>
+    
+    <!-- Main Application Logic - load this last -->
     <script src="app.js"></script>
 </body>
 </html> 

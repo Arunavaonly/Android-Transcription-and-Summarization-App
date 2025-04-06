@@ -1,0 +1,54 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Capacitor related
+ios/
+.sourcemaps/
+www/
+.gradle/
+.idea/
+.vscode/
+.DS_Store
+
+# Android related
+android/app/build/
+android/build/
+android/captures/
+android/local.properties
+android/.idea/
+android/.gradle/
+android/app/release/
+android/*.iml
+android/.settings/
+android/app/.cxx/
+android/app/src/main/assets/public/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build folders
+dist/
+build/
+out/
+
+# Logs
+*.log
+
+# Certificates
+*.keystore
+*.jks
+*.p12
+*.key
+*.mobileprovision
+
+# misc
+Thumbs.db
+.tmp/
+*.tmp
+*.bak

@@ -1,0 +1,31 @@
+{
+  "name": "voice-transcription-mobile",
+  "version": "1.0.0",
+  "description": "Mobile app for voice transcription and summarization",
+  "main": "index.js",
+  "scripts": {
+    "start": "npx serve public",
+    "build": "npx cap sync",
+    "init-android": "npx cap add android",
+    "open-android": "npx cap open android",
+    "build-debug": "cd android && ./gradlew assembleDebug"
+  },
+  "keywords": [
+    "transcription",
+    "summarization",
+    "voice",
+    "capacitor",
+    "mobile"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@capacitor-community/speech-recognition": "^5.0.1",
+    "@capacitor/android": "^5.5.1",
+    "@capacitor/core": "^5.5.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^5.7.8",
+    "serve": "^14.2.4"
+  }
+}

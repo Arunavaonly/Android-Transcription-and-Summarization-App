@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Voice Transcription</string>
+    <string name="title_activity_main">Voice Transcription</string>
+    <string name="package_name">com.transcription.voiceapp</string>
+    <string name="custom_url_scheme">com.transcription.voiceapp</string>
+</resources>

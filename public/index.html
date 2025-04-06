@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Voice Transcription & Summary</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Voice Transcription</h1>
+            <p>Speak, transcribe, and get an instant summary</p>
+        </header>
+
+        <main>
+            <div class="controls">
+                <button id="recordButton" class="btn record-btn">
+                    <i class="fas fa-microphone"></i>
+                    <span>Start Recording</span>
+                </button>
+                <div id="recordingStatus" class="status hidden">Recording...</div>
+                <div id="processingStatus" class="status hidden">Processing...</div>
+                <div id="errorMessage" class="error-message hidden"></div>
+                <div id="permissionMessage" class="status hidden">Please grant microphone permissions</div>
+            </div>
+
+            <div class="results-container">
+                <div class="result-box">
+                    <h2>Transcription</h2>
+                    <div id="transcriptionResult" class="result-content">Your transcription will appear here</div>
+                </div>
+                
+                <div class="result-box">
+                    <h2>Summary</h2>
+                    <div id="summaryResult" class="result-content">Your summary will appear here</div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>© 2025 Voice Transcription & Summary App</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html> 

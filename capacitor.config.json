@@ -1,0 +1,24 @@
+{
+  "appId": "com.transcription.voiceapp",
+  "appName": "Voice Transcription",
+  "webDir": "public",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#f5f5f5",
+      "androidSplashResourceName": "splash"
+    },
+    "SpeechRecognition": {
+      "androidPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    }
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

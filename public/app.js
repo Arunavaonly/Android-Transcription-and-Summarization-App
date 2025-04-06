@@ -171,7 +171,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             // Get the base64 audio data
             const base64Audio = recordResult.value.recordDataBase64;
             console.log('Received audio recording, size:', base64Audio.length);
-            
+
+            // --- ADD THIS LOG ---
+            console.log(`DEBUG: processAudioForTranscription - base64Audio length: ${base64Audio.length} characters.`);
+            // Approximate MB size (Base64 is ~33% larger than binary)
+            const approxSizeMB = (base64Audio.length * 6) / 8 / 1024 / 1024; 
+            console.log(`DEBUG: processAudioForTranscription - Approximate binary size: ${approxSizeMB.toFixed(2)} MB`);
+            // --- END ADDED LOG ---
+
             // Get the mime type
             const mimeType = recordResult.value.mimeType || 'audio/wav'; // Default to WAV if not provided
             console.log('Recording mime type:', mimeType);
@@ -239,7 +246,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                         languageCode: 'en-US',
                         model: 'default',
                         enableAutomaticPunctuation: true,
-                        useEnhanced: true, // Use enhanced model for better results
+                        useEnhanced: false,
                     },
                     audio: {
                         content: base64Audio

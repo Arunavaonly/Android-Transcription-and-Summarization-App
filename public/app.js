@@ -199,111 +199,138 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Send audio to Google Cloud Speech-to-Text API
     async function sendAudioToGoogleSpeech(base64Audio, mimeType) {
-        try {
-            // Determine encoding based on mimeType
-            let encoding = 'LINEAR16'; // Default for native voice recorder
-            let sampleRateHertz = 16000; // Default for most native recordings
-            
-            // Map MIME types to Google Speech API encodings
-            if (mimeType) {
-                const lowerMimeType = mimeType.toLowerCase();
-                if (lowerMimeType.includes('wav')) {
-                    encoding = 'LINEAR16';
-                    sampleRateHertz = 16000;
-                } else if (lowerMimeType.includes('mp4') || lowerMimeType.includes('mpeg')) {
-                    encoding = 'MP3';
-                    sampleRateHertz = 16000;
-                } else if (lowerMimeType.includes('aac')) {
-                    encoding = 'AMR';
-                    sampleRateHertz = 8000;
-                } else if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
-                    encoding = 'WEBM_OPUS';
-                    sampleRateHertz = 48000;
-                } else if (lowerMimeType.includes('ogg')) {
-                    encoding = 'OGG_OPUS';
-                    sampleRateHertz = 48000;
+        let retryCount = 0; // Define retryCount here
+        const maxRetries = 2; // Define maxRetries here
+        
+        while (retryCount <= maxRetries) {
+            try {
+                // Determine encoding based on mimeType
+                let encoding = 'LINEAR16'; // Default for native voice recorder
+                let sampleRateHertz = 16000; // Default for most native recordings
+                
+                // Map MIME types to Google Speech API encodings
+                if (mimeType) {
+                    const lowerMimeType = mimeType.toLowerCase();
+                    if (lowerMimeType.includes('wav')) {
+                        encoding = 'LINEAR16';
+                        sampleRateHertz = 16000;
+                    } else if (lowerMimeType.includes('mp4') || lowerMimeType.includes('mpeg')) {
+                        encoding = 'MP3';
+                        sampleRateHertz = 16000;
+                    } else if (lowerMimeType.includes('aac')) {
+                        encoding = 'AMR';
+                        sampleRateHertz = 8000;
+                    } else if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
+                        encoding = 'WEBM_OPUS';
+                        sampleRateHertz = 48000;
+                    } else if (lowerMimeType.includes('ogg')) {
+                        encoding = 'OGG_OPUS';
+                        sampleRateHertz = 48000;
+                    }
                 }
-            }
-            
-            console.log('Using encoding for Google Speech API:', encoding, 'with sample rate:', sampleRateHertz);
-            
-            // Prepare the request payload
-            const requestData = {
-                config: {
-                    encoding: encoding,
-                    sampleRateHertz: sampleRateHertz,
-                    languageCode: 'en-US',
-                    model: 'default',
-                    enableAutomaticPunctuation: true,
-                    useEnhanced: true, // Use enhanced model for better results
-                },
-                audio: {
-                    content: base64Audio
-                }
-            };
-            
-            // --- TEMPORARY DEBUGGING - ADD THESE LINES ---
-            const finalUrlForSpeechAPI = `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`;
-            console.log(`DEBUG: sendAudioToGoogleSpeech - Attempting API call (${retryCount + 1}/${maxRetries + 1}) to URL: ${finalUrlForSpeechAPI}`); 
-            
-            if (!GOOGLE_API_KEY || GOOGLE_API_KEY.length < 20) {
-                console.error("DEBUG: sendAudioToGoogleSpeech - API Key seems MISSING or too short just before call!");
-            }
-            
-            // Prepare the options for logging (ensure 'options' var holding headers/data is defined above)
-            const requestOptionsForLogging = {
-                method: 'POST',
-                url: finalUrlForSpeechAPI, // Log the final computed URL
-                headers: options.headers,  // Log headers from options object
-                // Avoid logging the full base64 audio data in production/real logs
-                // data: options.data, // Potentially very large, skip logging full data for now
-                dataLength: options.data ? options.data.length : 0, // Log the length instead
-                connectTimeout: 60 + (retryCount * 30), 
-                readTimeout: 60 + (retryCount * 30)
-            };
-            // Use JSON.stringify for complex objects
-            console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
-            // --- END TEMPORARY DEBUGGING ---
+                
+                console.log('Using encoding for Google Speech API:', encoding, 'with sample rate:', sampleRateHertz);
+                
+                // Prepare the request payload
+                const requestData = {
+                    config: {
+                        encoding: encoding,
+                        sampleRateHertz: sampleRateHertz,
+                        languageCode: 'en-US',
+                        model: 'default',
+                        enableAutomaticPunctuation: true,
+                        useEnhanced: true, // Use enhanced model for better results
+                    },
+                    audio: {
+                        content: base64Audio
+                    }
+                };
+                
+                // Define options needed for the request AND logging
+                const options = {
+                    url: `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    data: JSON.stringify(requestData)
+                };
 
-            // The original request call follows immediately after these logs:
-            const response = await window.Capacitor.Plugins.CapacitorHttp.request({ // <-- Original line
-                method: 'POST',
-                ...options, // The 'options' object should contain url, headers, data
-                connectTimeout: 60 + (retryCount * 30), 
-                readTimeout: 60 + (retryCount * 30)
-            }); 
-            
-            // Parse the response
-            if (response.status === 200) {
-                const data = JSON.parse(response.data);
-                if (data && data.results && data.results.length > 0) {
-                    // Combine all transcriptions
-                    const transcript = data.results
-                        .map(result => result.alternatives[0].transcript)
-                        .join(' ');
-                    console.log('Received transcription:', transcript.substring(0, 50) + '...');
-                    return transcript;
+                // --- TEMPORARY DEBUGGING --- 
+                const finalUrlForSpeechAPI = options.url; // Use url from options
+                console.log(`DEBUG: sendAudioToGoogleSpeech - Attempting API call (${retryCount + 1}/${maxRetries + 1}) to URL: ${finalUrlForSpeechAPI}`); 
+                
+                if (!GOOGLE_API_KEY || GOOGLE_API_KEY.length < 20) {
+                    console.error("DEBUG: sendAudioToGoogleSpeech - API Key seems MISSING or too short just before call!");
+                }
+                
+                const requestOptionsForLogging = {
+                    method: 'POST',
+                    url: finalUrlForSpeechAPI, 
+                    headers: options.headers,  
+                    dataLength: options.data ? options.data.length : 0, 
+                    connectTimeout: 60 + (retryCount * 30), 
+                    readTimeout: 60 + (retryCount * 30)
+                };
+                console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
+                // --- END TEMPORARY DEBUGGING --- 
+    
+                // Make the actual API request call
+                const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                    method: 'POST',
+                    ...options, // Spread the defined options
+                    connectTimeout: 60 + (retryCount * 30), 
+                    readTimeout: 60 + (retryCount * 30)
+                }); 
+                
+                // Parse the response (Success Case)
+                if (response.status === 200) {
+                    const data = JSON.parse(response.data);
+                    if (data && data.results && data.results.length > 0) {
+                        const transcript = data.results
+                            .map(result => result.alternatives[0].transcript)
+                            .join(' ');
+                        console.log('Received transcription:', transcript.substring(0, 50) + '...');
+                        return transcript; // Return success, exit loop
+                    } else {
+                        console.warn('No transcription results in API response');
+                        return ''; // Return success (empty), exit loop
+                    }
                 } else {
-                    console.warn('No transcription results in API response');
-                    return '';
+                    // Handle non-200 status codes from API
+                    console.error('Google Speech API error response:', response);
+                    throw new Error(`Google Speech API error: ${response.status} - ${JSON.stringify(response.data)}`);
                 }
-            } else {
-                console.error('Google Speech API error:', response.data);
-                throw new Error(`Google Speech API error: ${response.status} - ${response.data}`);
+            } catch (err) {
+                // --- TEMPORARY DEBUGGING --- 
+                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED. Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
+                // --- END TEMPORARY DEBUGGING --- 
+    
+                // Log standard error message
+                console.error(`Attempt ${retryCount + 1} failed:`, err);
+                
+                // Check if it's a timeout and if retries are left
+                if (retryCount < maxRetries && 
+                    (err.message?.includes('timeout') || 
+                     err.message?.includes('timed out') || 
+                     err.code === "SocketTimeoutException")) {
+                    
+                    retryCount++;
+                    console.log(`Retrying request (${retryCount}/${maxRetries})...`);
+                    await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5s before retry
+                    continue; // Go to the next iteration of the while loop
+                }
+                
+                // If it's not a retryable error or retries exhausted, handle API key issue or re-throw
+                if (err.message?.includes('API key')) {
+                    throw new Error('Invalid or missing API key. Please check api-config.js file.');
+                }
+                // For any other error, re-throw to be caught by the calling function
+                throw err; 
             }
-        } catch (err) {
-            // --- TEMPORARY DEBUGGING - ADD THIS LINE ---
-            console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED. Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
-            // --- END TEMPORARY DEBUGGING ---
-
-            // Existing error logging follows:
-            console.error(`Attempt ${retryCount + 1} failed:`, err); 
-            // If the error is related to the API key or authentication
-            if (err.message && err.message.includes('API key')) {
-                throw new Error('Invalid or missing API key. Please check api-config.js file.');
-            }
-            throw err;
-        }
+        } // End while loop
+        
+        // If the loop finishes without returning or throwing a specific error, it means max retries were exceeded
+        throw new Error("Max retries exceeded for Google Speech API call after " + (maxRetries + 1) + " attempts.");
     }
     
     // Initialize app

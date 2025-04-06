@@ -55,36 +55,50 @@ document.addEventListener('DOMContentLoaded', async () => {
                         });
                         
                         speechRecognitionPlugin.addListener('finalResults', (data) => {
-                            if (data && data.matches && data.matches.length > 0) {
-                                const finalResult = data.matches[0];
-                                addToTranscription(finalResult);
+                            if (data.matches?.length) {
+                              const finalResult = data.matches[0];
+                              addToTranscription(finalResult);
                             }
-                        });
-
+                            // *** NEW: restart immediately for continuous listening ***
+                            if (isRecording) {
+                              speechRecognitionPlugin.start({
+                                language: 'en-US',
+                                partialResults: true,
+                                profanityFilter: false
+                              }).catch(err => {
+                                console.error('Error restarting after finalResults:', err);
+                              });
+                            }
+                          });
+                          
                         // Add error listener
                         speechRecognitionPlugin.addListener('error', (error) => {
                             console.error('Speech recognition error:', error);
-                            if (isRecording) {
-                                // If we get "No match" error but we're supposed to be recording,
-                                // restart recording after a brief pause
-                                if (error.message === "No match") {
-                                    setTimeout(() => {
-                                        if (isRecording) {
-                                            console.log('Restarting speech recognition after No match error');
-                                            speechRecognitionPlugin.start({
-                                                language: 'en-US',
-                                                partialResults: true,
-                                                profanityFilter: false
-                                            }).catch(err => {
-                                                console.error('Error restarting speech recognition:', err);
-                                            });
-                                        }
-                                    }, 1000);
-                                } else {
-                                    isRecording = false;
-                                    updateUIForRecording(false);
-                                    showErrorMessage('Speech recognition error: ' + error.message);
+                        
+                            // These errors are transient—just restart the recognizer
+                            const isTransient =
+                            error.message === 'No match' ||
+                            error.message === 'Client side error';
+                        
+                            if (isRecording && isTransient) {
+                            setTimeout(() => {
+                                if (isRecording) {
+                                console.log('Restarting after transient error:', error.message);
+                                speechRecognitionPlugin.start({
+                                    language: 'en-US',
+                                    partialResults: true,
+                                    profanityFilter: false
+                                }).catch(err => {
+                                    console.error('Error restarting speech recognition:', err);
+                                });
                                 }
+                            }, 500);
+                            }
+                            // Any other error should stop the session
+                            else if (isRecording) {
+                            isRecording = false;
+                            updateUIForRecording(false);
+                            showErrorMessage('Speech recognition error: ' + error.message);
                             }
                         });
                     } catch (err) {

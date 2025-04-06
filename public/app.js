@@ -182,27 +182,44 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.log(`DEBUG: base64Audio (short): ${base64Audio}`);
             }
             // Check specifically for data URI prefix
-            if (base64Audio && base64Audio.startsWith('data:')) {
-                console.warn("DEBUG: base64Audio seems to have a data URI prefix! Attempting to strip it.");
-                // Potential Fix 1: Strip the prefix before sending
-                base64Audio = base64Audio.substring(base64Audio.indexOf(',') + 1); 
-                console.log(`DEBUG: Stripped base64Audio START: ${base64Audio.substring(0, 100)}`);
+            let cleanedBase64Audio = base64Audio; // Start with original
+            if (cleanedBase64Audio && cleanedBase64Audio.startsWith('data:')) {
+                console.warn("DEBUG: base64Audio has data URI prefix. Stripping it.");
+                const commaIndex = cleanedBase64Audio.indexOf(',');
+                if (commaIndex !== -1) {
+                    cleanedBase64Audio = cleanedBase64Audio.substring(commaIndex + 1);
+                } else {
+                     console.error("DEBUG: Found 'data:' prefix but no comma to split on!");
+                     // Proceeding with potentially incorrect data, but log warning
+                }
+            } else {
+                console.log("DEBUG: base64Audio does not have data URI prefix.");
             }
-            // --- END DETAILED LOGGING ---
+            
+            // Remove potential newlines and whitespace 
+            // (Standard Base64 shouldn't have them, but let's be safe)
+            const originalLength = cleanedBase64Audio.length;
+            cleanedBase64Audio = cleanedBase64Audio.replace(/\s/g, ''); 
+            if (cleanedBase64Audio.length !== originalLength) {
+                console.warn(`DEBUG: Removed whitespace/newlines from base64 string. Original length: ${originalLength}, New length: ${cleanedBase64Audio.length}`);
+            }
 
-            // --- ADD THIS LOG ---
-            console.log(`DEBUG: processAudioForTranscription - base64Audio length: ${base64Audio.length} characters.`);
-            // Approximate MB size (Base64 is ~33% larger than binary)
-            const approxSizeMB = (base64Audio.length * 6) / 8 / 1024 / 1024; 
+            console.log(`DEBUG: Final cleaned base64Audio START: ${cleanedBase64Audio.substring(0, 100)}`);
+            console.log(`DEBUG: Final cleaned base64Audio END: ${cleanedBase64Audio.substring(cleanedBase64Audio.length - 50)}`);
+            // --- END MODIFIED BLOCK ---
+
+            // --- EXISTING SIZE LOGGING (Update to use cleaned data) ---
+            console.log(`DEBUG: processAudioForTranscription - FINAL cleaned base64Audio length: ${cleanedBase64Audio.length} characters.`);
+            const approxSizeMB = (cleanedBase64Audio.length * 6) / 8 / 1024 / 1024; 
             console.log(`DEBUG: processAudioForTranscription - Approximate binary size: ${approxSizeMB.toFixed(2)} MB`);
-            // --- END ADDED LOG ---
+            // --- END EXISTING SIZE LOGGING ---
 
             // Get the mime type
-            const mimeType = recordResult.value.mimeType || 'audio/wav'; // Default to WAV if not provided
+            const mimeType = recordResult.value.mimeType || 'audio/wav';
             console.log('Recording mime type:', mimeType);
             
-            // Send to Google Cloud Speech-to-Text API
-            const transcription = await sendAudioToGoogleSpeech(base64Audio, mimeType);
+            // Send to Google Cloud Speech-to-Text API (using the cleaned data)
+            const transcription = await sendAudioToGoogleSpeech(cleanedBase64Audio, mimeType);
             
             // Update the UI with the transcription
             if (transcription && transcription.trim().length > 0) {

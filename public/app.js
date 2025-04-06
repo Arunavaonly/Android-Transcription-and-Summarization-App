@@ -34,8 +34,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 capacitorAvailable = true;
                 console.log('Capacitor is available on native platform');
                 
-                // Check if HTTP plugin is available
-                if (window.Capacitor.Plugins && window.Capacitor.Plugins.Http) {
+                // Check if HTTP plugin is available - using the community HTTP plugin
+                if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('HTTP plugin found');
                     
                     // Setup audio recorder once HTTP plugin is confirmed
@@ -161,7 +161,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 data: JSON.stringify(requestData)
             };
             
-            const response = await window.Capacitor.Plugins.Http.request({
+            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                 method: 'POST',
                 ...options
             });
@@ -328,7 +328,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const requestData = { text };
             
             // Make the API request using Capacitor HTTP plugin
-            const response = await window.Capacitor.Plugins.Http.request({
+            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
                 method: 'POST',
                 url: SUMMARY_API_URL,
                 headers: {

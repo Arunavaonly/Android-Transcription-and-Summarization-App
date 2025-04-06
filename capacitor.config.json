@@ -12,7 +12,7 @@
       "backgroundColor": "#f5f5f5",
       "androidSplashResourceName": "splash"
     },
-    "Http": {
+    "CapacitorHttp": {
       "enabled": true
     },
     "Permissions": {

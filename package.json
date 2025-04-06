@@ -22,7 +22,7 @@
   "dependencies": {
     "@capacitor/android": "^5.5.1",
     "@capacitor/core": "^5.5.1",
-    "@capacitor/http": "^0.0.2"
+    "@capacitor-community/http": "^1.4.1"
   },
   "devDependencies": {
     "@capacitor/cli": "^5.7.8",

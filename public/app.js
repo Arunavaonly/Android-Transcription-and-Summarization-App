@@ -74,7 +74,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                                             speechRecognitionPlugin.start({
                                                 language: 'en-US',
                                                 partialResults: true,
-                                                popup: false,
                                                 profanityFilter: false
                                             }).catch(err => {
                                                 console.error('Error restarting speech recognition:', err);

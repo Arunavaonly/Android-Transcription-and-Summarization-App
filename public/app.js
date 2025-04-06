@@ -18,6 +18,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let transcriptText = '';
     let capacitorAvailable = false;
     let speechRecognitionPlugin = null;
+    let transcriptParts = [];  // Store individual transcript segments
+    let restartCount = 0;      // Track restart attempts
   
     // Initialize Capacitor if available
     async function initCapacitor() {
@@ -55,50 +57,41 @@ document.addEventListener('DOMContentLoaded', async () => {
                         });
                         
                         speechRecognitionPlugin.addListener('finalResults', (data) => {
-                            if (data.matches?.length) {
-                              const finalResult = data.matches[0];
-                              addToTranscription(finalResult);
+                            // Reset restart counter on successful recognition
+                            restartCount = 0;
+                            
+                            if (data?.matches?.length) {
+                                const finalResult = data.matches[0];
+                                addToTranscription(finalResult);
+                                console.log(`Added text: "${finalResult}"`);
                             }
-                            // *** NEW: restart immediately for continuous listening ***
+                            
+                            // Restart immediately for continuous listening
                             if (isRecording) {
-                              speechRecognitionPlugin.start({
-                                language: 'en-US',
-                                partialResults: true,
-                                profanityFilter: false
-                              }).catch(err => {
-                                console.error('Error restarting after finalResults:', err);
-                              });
+                                console.log('Recognition finished, restarting automatically');
+                                startRecognitionAttempt();
                             }
-                          });
+                        });
                           
-                        // Add error listener
+                        // Add error listener with better error handling
                         speechRecognitionPlugin.addListener('error', (error) => {
                             console.error('Speech recognition error:', error);
-                        
-                            // These errors are transient—just restart the recognizer
-                            const isTransient =
-                            error.message === 'No match' ||
-                            error.message === 'Client side error';
-                        
-                            if (isRecording && isTransient) {
-                            setTimeout(() => {
-                                if (isRecording) {
-                                console.log('Restarting after transient error:', error.message);
-                                speechRecognitionPlugin.start({
-                                    language: 'en-US',
-                                    partialResults: true,
-                                    profanityFilter: false
-                                }).catch(err => {
-                                    console.error('Error restarting speech recognition:', err);
-                                });
-                                }
-                            }, 500);
-                            }
-                            // Any other error should stop the session
-                            else if (isRecording) {
-                            isRecording = false;
-                            updateUIForRecording(false);
-                            showErrorMessage('Speech recognition error: ' + error.message);
+                            
+                            // All "No match" errors are transient - just restart
+                            if (isRecording) {
+                                // Increment restart counter
+                                restartCount++;
+                                console.log(`Recognition error (attempt ${restartCount}): ${error.message}`);
+                                
+                                // Longer delay between restarts to help prevent rapid failures
+                                const delayMs = Math.min(1000, 300 + (restartCount * 100));
+                                
+                                setTimeout(() => {
+                                    if (isRecording) {
+                                        console.log(`Restarting recognition after error (delay: ${delayMs}ms)`);
+                                        startRecognitionAttempt();
+                                    }
+                                }, delayMs);
                             }
                         });
                     } catch (err) {
@@ -116,6 +109,26 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (err) {
             console.error('Capacitor initialization error:', err);
             showErrorMessage('Error initializing speech recognition: ' + err.message);
+        }
+    }
+    
+    // Start a single recognition attempt
+    async function startRecognitionAttempt() {
+        if (!isRecording) return;
+        
+        try {
+            console.log('Starting recognition attempt');
+            await speechRecognitionPlugin.start({
+                language: 'en-US',
+                partialResults: true,
+                profanityFilter: false
+            });
+        } catch (err) {
+            console.error('Error starting recognition attempt:', err);
+            if (isRecording) {
+                // If we fail to start, try again after a delay
+                setTimeout(startRecognitionAttempt, 1000);
+            }
         }
     }
     
@@ -156,6 +169,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // Reset transcript and UI
         transcriptText = '';
+        transcriptParts = [];
+        restartCount = 0;
         transcriptionResult.textContent = 'Listening...';
         summaryResult.textContent = 'Your summary will appear here';
         
@@ -168,7 +183,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!hasPerm) {
                 console.log('Requesting microphone permission...');
                 permissionMessage.classList.remove('hidden');
-                // On Android this returns void, so we don’t inspect the return value
+                // On Android this returns void, so we don't inspect the return value
                 await speechRecognitionPlugin.requestPermission();
                 permissionMessage.classList.add('hidden');
         }
@@ -185,6 +200,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             isRecording = true;
             updateUIForRecording(true);
             permissionMessage.classList.add('hidden');
+            
+            // Start first recognition attempt
+            await startRecognitionAttempt();
         } catch (err) {
             console.error('Start recording error:', err);
             isRecording = false;
@@ -214,18 +232,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             await speechRecognitionPlugin.stop();
             console.log('Speech recognition stopped');
             
-            // If we have meaningful transcript, process it
-            if (transcriptText && transcriptText.trim().length > 5) {
-                console.log(`Transcription complete: ${transcriptText.substring(0, 50)}... (length: ${transcriptText.length})`);
+            // CRITICAL FIX: Always send whatever transcript we have to the API
+            // Only check if we have any text at all
+            if (transcriptText && transcriptText.trim().length > 0) {
+                console.log(`Transcription complete (${transcriptText.length} chars): "${transcriptText}"`);
                 processingStatus.classList.remove('hidden');
                 sendTranscriptionForSummary(transcriptText);
             } else {
-                console.warn('Transcription too short or empty:', transcriptText);
-                showErrorMessage('Recording too short or no speech detected. Please try again and speak clearly.');
+                console.warn('No transcription captured');
+                showErrorMessage('No speech detected. Please try again and speak clearly.');
             }
         } catch (err) {
             console.error('Stop recording error:', err);
-            showErrorMessage('Error stopping recording: ' + err.message);
+            
+            // EVEN if stop fails, still try to send whatever transcription we have
+            if (transcriptText && transcriptText.trim().length > 0) {
+                console.log(`Sending transcription despite stop error: ${transcriptText}`);
+                processingStatus.classList.remove('hidden');
+                sendTranscriptionForSummary(transcriptText);
+            } else {
+                showErrorMessage('Error stopping recording: ' + err.message);
+            }
         }
     }
     
@@ -237,9 +264,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Add final results to the transcript
     function addToTranscription(text) {
-        transcriptText += ' ' + text;
-        transcriptionResult.textContent = transcriptText;
-        transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+        if (text && text.trim()) {
+            transcriptParts.push(text.trim());
+            transcriptText = transcriptParts.join(' ');
+            transcriptionResult.textContent = transcriptText;
+            transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+        }
     }
     
     // UI toggle for recording state
@@ -284,8 +314,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         try {
             // Check if we have valid text to send
-            if (!text || text.trim().length < 5) {
-                throw new Error('Text too short or empty');
+            if (!text || text.trim().length === 0) {
+                throw new Error('Text empty');
             }
             
             const requestData = { text };

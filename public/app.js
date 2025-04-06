@@ -26,6 +26,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     let recordingStartTime = null;
     let voiceRecorderAvailable = false;
 
+    // Get access to Voice Recorder plugin with fallbacks
+    function getVoiceRecorderPlugin() {
+        // Try different ways to access the plugin
+        if (window.Capacitor && window.Capacitor.Plugins) {
+            // Try standard Capacitor.Plugins.VoiceRecorder
+            if (window.Capacitor.Plugins.VoiceRecorder) {
+                console.log('Using VoiceRecorder from Capacitor.Plugins');
+                return window.Capacitor.Plugins.VoiceRecorder;
+            }
+            
+            // Try other potential names
+            if (window.Capacitor.Plugins['VoiceRecorder']) {
+                console.log('Using VoiceRecorder from Capacitor.Plugins["VoiceRecorder"]');
+                return window.Capacitor.Plugins['VoiceRecorder'];
+            }
+            
+            if (window.Capacitor.Plugins['capacitor-voice-recorder']) {
+                console.log('Using VoiceRecorder from Capacitor.Plugins["capacitor-voice-recorder"]');
+                return window.Capacitor.Plugins['capacitor-voice-recorder'];
+            }
+            
+            // Try case variations
+            const pluginKeys = Object.keys(window.Capacitor.Plugins);
+            console.log('Available plugin keys:', pluginKeys);
+            
+            const voiceRecorderKey = pluginKeys.find(key => 
+                key.toLowerCase().includes('voice') || 
+                key.toLowerCase().includes('record')
+            );
+            
+            if (voiceRecorderKey) {
+                console.log(`Using VoiceRecorder from alternate key: ${voiceRecorderKey}`);
+                return window.Capacitor.Plugins[voiceRecorderKey];
+            }
+        }
+        
+        // Try global
+        if (typeof VoiceRecorder !== 'undefined') {
+            console.log('Using VoiceRecorder from global scope');
+            return VoiceRecorder;
+        }
+        
+        // Check for other naming in global scope
+        if (typeof capacitorVoiceRecorder !== 'undefined') {
+            console.log('Using capacitorVoiceRecorder from global scope');
+            return capacitorVoiceRecorder;
+        }
+        
+        console.error('Voice Recorder plugin not found in any namespace');
+        return null;
+    }
+    
     // Initialize Capacitor plugins
     async function initCapacitor() {
         try {
@@ -33,19 +85,27 @@ document.addEventListener('DOMContentLoaded', async () => {
                 capacitorAvailable = true;
                 console.log('Capacitor is available on native platform');
                 
+                // Log all available plugins for debugging
+                console.log('Available Capacitor Plugins:', window.Capacitor.Plugins ? Object.keys(window.Capacitor.Plugins) : 'None');
+                
                 // Check for required plugins
                 if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('HTTP plugin found');
                     
-                    // Check for Voice Recorder plugin
-                    if (typeof VoiceRecorder !== 'undefined') {
+                    // Try to get Voice Recorder plugin with fallbacks
+                    const voiceRecorderPlugin = getVoiceRecorderPlugin();
+                    
+                    if (voiceRecorderPlugin) {
                         voiceRecorderAvailable = true;
                         console.log('Voice Recorder plugin found');
+                        
+                        // Use global variable to store plugin reference
+                        window.voiceRecorderPluginRef = voiceRecorderPlugin;
                         
                         // Check for permission
                         await checkMicrophonePermission();
                     } else {
-                        console.error('Voice Recorder plugin not found');
+                        console.error('Voice Recorder plugin not found in any namespace');
                         showErrorMessage('Voice Recorder plugin not found - required for audio recording');
                     }
                     
@@ -68,13 +128,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function checkMicrophonePermission() {
         try {
             console.log('Checking microphone permission');
-            const permResult = await VoiceRecorder.hasAudioRecordingPermission();
+            
+            // Use the global plugin reference
+            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
+            
+            if (!voiceRecorderPlugin) {
+                throw new Error('Voice Recorder plugin not available');
+            }
+            
+            const permResult = await voiceRecorderPlugin.hasAudioRecordingPermission();
             
             if (!permResult.value) {
                 console.log('Requesting microphone permission');
                 permissionMessage.classList.remove('hidden');
                 
-                const requestResult = await VoiceRecorder.requestAudioRecordingPermission();
+                const requestResult = await voiceRecorderPlugin.requestAudioRecordingPermission();
                 if (!requestResult.value) {
                     console.error('Microphone permission denied');
                     showErrorMessage('Microphone access is required for recording.');
@@ -275,9 +343,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         summaryResult.textContent = 'Your summary will appear here';
         
         try {
+            // Use the global plugin reference
+            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
+            
+            if (!voiceRecorderPlugin) {
+                throw new Error('Voice Recorder plugin not available');
+            }
+            
             // Start recording using the Voice Recorder plugin
             console.log('Starting voice recording...');
-            await VoiceRecorder.startRecording();
+            await voiceRecorderPlugin.startRecording();
             recordingStartTime = Date.now();
             
             // Start recording indicator
@@ -316,8 +391,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         try {
+            // Use the global plugin reference
+            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
+            
+            if (!voiceRecorderPlugin) {
+                throw new Error('Voice Recorder plugin not available');
+            }
+            
             console.log('Stopping voice recording...');
-            const recordResult = await VoiceRecorder.stopRecording();
+            const recordResult = await voiceRecorderPlugin.stopRecording();
             console.log('Voice recording stopped');
             
             // Process the recording result

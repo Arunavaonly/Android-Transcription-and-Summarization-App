@@ -6,6 +6,57 @@
     <title>Voice Transcription & Summary</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <!-- API Configuration must be loaded before app.js -->
+    <script src="api-config.js"></script>
+    
+    <!-- Capacitor Test -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                console.log('----- CAPACITOR PLUGIN TEST -----');
+                if (window.Capacitor) {
+                    console.log('Capacitor is available');
+                    console.log('Is Native:', window.Capacitor.isNativePlatform());
+                    console.log('Platform:', window.Capacitor.getPlatform());
+                    
+                    if (window.Capacitor.Plugins) {
+                        console.log('Available plugins:', Object.keys(window.Capacitor.Plugins));
+                        
+                        if (window.Capacitor.Plugins.VoiceRecorder) {
+                            console.log('Voice Recorder plugin is available in Capacitor.Plugins');
+                        } else {
+                            console.log('Voice Recorder plugin is NOT available in Capacitor.Plugins');
+                        }
+                    } else {
+                        console.log('No Capacitor.Plugins object found');
+                    }
+                    
+                    if (typeof VoiceRecorder !== 'undefined') {
+                        console.log('VoiceRecorder is available in global scope');
+                    } else {
+                        console.log('VoiceRecorder is NOT available in global scope');
+                    }
+                } else {
+                    console.log('Capacitor is not available');
+                }
+                console.log('----- END OF TEST -----');
+            }, 1000); // Give Capacitor time to initialize
+        });
+    </script>
+    
+    <!-- Capacitor ready check -->
+    <script>
+        document.addEventListener('deviceready', function() {
+            console.log('Capacitor is ready');
+            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+                console.log('Running on platform: ' + window.Capacitor.getPlatform());
+            }
+        });
+    </script>
+    
+    <!-- Main app logic (load last) -->
+    <script src="app.js"></script>
 </head>
 <body>
     <div class="container">
@@ -50,24 +101,5 @@
     <!-- Core Capacitor Runtime -->
     <script src="capacitor.js"></script>
     <!-- Plugin scripts will be automatically added during capacitor sync -->
-    
-    <!-- API Configuration - must be loaded before app.js -->
-    <script src="api-config.js"></script>
-    
-    <!-- Voice Recorder Plugin load check -->
-    <script>
-        document.addEventListener('capacitorReady', function() {
-            // Log when Capacitor is fully ready
-            console.log('Capacitor runtime is ready');
-            
-            // Check if we're on a native platform
-            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-                console.log('Running on native platform:', window.Capacitor.getPlatform());
-            }
-        });
-    </script>
-    
-    <!-- Main Application Logic - load this last -->
-    <script src="app.js"></script>
 </body>
 </html> 

@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let capacitorAvailable = false;
     let recordingInterval = null;
     let recordingStartTime = null;
+    let permissionsChecked = false;
 
     // Initialize Capacitor plugins
     async function initCapacitor() {
@@ -38,8 +39,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
                     console.log('HTTP plugin found');
                     
-                    // Setup audio recorder once HTTP plugin is confirmed
-                    setupAudioRecorder();
+                    // Don't setup recorder here - we'll do it when the user clicks record
+                    console.log('App initialization complete, waiting for user interaction');
                 } else {
                     console.error('HTTP plugin not found in Capacitor.Plugins');
                     showErrorMessage('HTTP plugin not found - required for API calls');
@@ -54,39 +55,87 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
     
-    // Setup the audio recorder
-    function setupAudioRecorder() {
+    // Check and request permissions explicitly
+    async function checkMicrophonePermission() {
+        // Skip if already checked
+        if (permissionsChecked) return true;
+        
         try {
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(stream => {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    const audioContext = new AudioContext();
-                    const audioStreamSource = audioContext.createMediaStreamSource(stream);
-                    
-                    // Create media recorder
-                    audioRecorder = new MediaRecorder(stream);
-                    audioRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            audioChunks.push(event.data);
-                        }
-                    };
-                    
-                    // Handle recording stopped
-                    audioRecorder.onstop = async () => {
-                        // Process the audio chunks here
-                        if (audioChunks.length > 0) {
-                            await processAudioForTranscription();
-                        }
-                    };
-                })
-                .catch(err => {
-                    console.error('Error accessing audio stream:', err);
-                    showErrorMessage('Microphone access denied: ' + err.message);
-                    permissionMessage.classList.remove('hidden');
+            // Check if we have the Permissions plugin
+            if (window.Capacitor.Plugins.Permissions) {
+                console.log('Checking microphone permission');
+                
+                const permissionState = await window.Capacitor.Plugins.Permissions.query({
+                    name: 'microphone'
                 });
+                
+                console.log('Permission state:', permissionState.state);
+                
+                if (permissionState.state !== 'granted') {
+                    console.log('Requesting microphone permission');
+                    const requestResult = await window.Capacitor.Plugins.Permissions.request({
+                        name: 'microphone'
+                    });
+                    
+                    if (requestResult.state !== 'granted') {
+                        console.error('Microphone permission denied');
+                        showErrorMessage('Microphone access is required for recording.');
+                        permissionMessage.classList.remove('hidden');
+                        return false;
+                    }
+                }
+                
+                permissionsChecked = true;
+                return true;
+            } else {
+                // Fallback to mediaDevices API for permission
+                console.log('Permissions plugin not available, using mediaDevices API');
+                return true;
+            }
+        } catch (err) {
+            console.error('Error checking permissions:', err);
+            showErrorMessage('Could not verify microphone permissions: ' + err.message);
+            return false;
+        }
+    }
+    
+    // Setup the audio recorder
+    async function setupAudioRecorder() {
+        if (audioRecorder) {
+            console.log('Audio recorder already set up');
+            return true;
+        }
+        
+        try {
+            console.log('Setting up audio recorder');
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            const audioContext = new AudioContext();
+            const audioStreamSource = audioContext.createMediaStreamSource(stream);
+            
+            // Create media recorder
+            audioRecorder = new MediaRecorder(stream);
+            audioRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    audioChunks.push(event.data);
+                }
+            };
+            
+            // Handle recording stopped
+            audioRecorder.onstop = async () => {
+                // Process the audio chunks here
+                if (audioChunks.length > 0) {
+                    await processAudioForTranscription();
+                }
+            };
+            
+            console.log('Audio recorder successfully set up');
+            return true;
         } catch (err) {
             console.error('Error setting up audio recorder:', err);
             showErrorMessage('Could not set up audio recording: ' + err.message);
+            return false;
         }
     }
     
@@ -201,21 +250,39 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         
-        if (!audioRecorder) {
-            showErrorMessage('Audio recorder not initialized properly.');
-            return;
-        }
-        
         if (recordButton.hasAttribute('data-processing')) return;
         recordButton.setAttribute('data-processing', '');
         
-        if (isRecording) {
-            await stopRecording();
-        } else {
-            await startRecording();
+        try {
+            if (isRecording) {
+                await stopRecording();
+            } else {
+                // First check permissions and setup recorder
+                const hasPermission = await checkMicrophonePermission();
+                if (!hasPermission) {
+                    console.error('Permission check failed');
+                    showErrorMessage('Microphone permission is required.');
+                    return;
+                }
+                
+                // Then setup the recorder if it's not already set up
+                if (!audioRecorder) {
+                    const setupSuccess = await setupAudioRecorder();
+                    if (!setupSuccess) {
+                        console.error('Setup failed');
+                        showErrorMessage('Failed to initialize audio recorder.');
+                        return;
+                    }
+                }
+                
+                await startRecording();
+            }
+        } catch (err) {
+            console.error('Toggle recording error:', err);
+            showErrorMessage('Error toggling recording: ' + err.message);
+        } finally {
+            setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
         }
-        
-        setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
     }
     
     // Start recording
@@ -246,6 +313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 recordingStatus.textContent = `Recording... ${minutes}:${seconds.toString().padStart(2, '0')}`;
             }, 1000);
             
+            console.log('Recording started successfully');
         } catch (err) {
             console.error('Start recording error:', err);
             isRecording = false;

@@ -9,6 +9,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const permissionMessage = document.getElementById('permissionMessage');
     const transcriptionResult = document.getElementById('transcriptionResult');
     const summaryResult = document.getElementById('summaryResult');
+    const stopButton = document.getElementById('stopButton');
+    const statusMessage = document.getElementById('statusMessage');
+    const summaryProcessingStatus = document.getElementById('summaryProcessingStatus');
+    const testWavButton = document.getElementById('testWavButton');
+    const audioFileInput = document.getElementById('audioFileInput');
+    const processUploadButton = document.getElementById('processUploadButton');
+    const fileInfo = document.getElementById('fileInfo');
   
     // API endpoint for summarization
     const SUMMARY_API_URL = 'https://trans-and-sum-project.el.r.appspot.com/summarize';
@@ -25,6 +32,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     let recordingInterval = null;
     let recordingStartTime = null;
     let voiceRecorderAvailable = false;
+    let recorder = null;
+    let audioChunks = [];
+    let lastRecordResult = null;
+    let selectedFile = null;
 
     // Get access to Voice Recorder plugin with fallbacks
     function getVoiceRecorderPlugin() {
@@ -172,61 +183,48 @@ document.addEventListener('DOMContentLoaded', async () => {
             const base64Audio = recordResult.value.recordDataBase64;
             console.log('Received audio recording, size:', base64Audio.length); 
 
-            // --- ADD DETAILED LOGGING ---
-            console.log(`DEBUG: Raw base64Audio length: ${base64Audio.length}`);
-            // Log the first ~100 and last ~50 characters to check for prefixes/suffixes/corruption
-            if (base64Audio && base64Audio.length > 150) {
-                console.log(`DEBUG: base64Audio START: ${base64Audio.substring(0, 100)}`);
-                console.log(`DEBUG: base64Audio END: ${base64Audio.substring(base64Audio.length - 50)}`);
-            } else {
-                console.log(`DEBUG: base64Audio (short): ${base64Audio}`);
-            }
-            // Check specifically for data URI prefix
-            let cleanedBase64Audio = base64Audio; // Start with original
+            // --- Robust Base64 Cleaning and Padding --- 
+            let cleanedBase64Audio = base64Audio; 
+            // Strip data URI prefix if present
             if (cleanedBase64Audio && cleanedBase64Audio.startsWith('data:')) {
-                console.warn("DEBUG: base64Audio has data URI prefix. Stripping it.");
+                console.warn("DEBUG: (processAudio) base64Audio has data URI prefix. Stripping it.");
                 const commaIndex = cleanedBase64Audio.indexOf(',');
                 if (commaIndex !== -1) {
                     cleanedBase64Audio = cleanedBase64Audio.substring(commaIndex + 1);
                 } else {
-                     console.error("DEBUG: Found 'data:' prefix but no comma to split on!");
-                     // Proceeding with potentially incorrect data, but log warning
+                     console.error("DEBUG: (processAudio) Found 'data:' prefix but no comma!");
                 }
             } else {
-                console.log("DEBUG: base64Audio does not have data URI prefix.");
+                 console.log("DEBUG: (processAudio) base64Audio does not have data URI prefix.");
             }
-            
             // Remove potential newlines and whitespace 
-            // (Standard Base64 shouldn't have them, but let's be safe)
             const originalLength = cleanedBase64Audio.length;
             cleanedBase64Audio = cleanedBase64Audio.replace(/\s/g, ''); 
             if (cleanedBase64Audio.length !== originalLength) {
-                console.warn(`DEBUG: Removed whitespace/newlines from base64 string. Original length: ${originalLength}, New length: ${cleanedBase64Audio.length}`);
+                console.warn(`DEBUG: (processAudio) Removed whitespace. Orig: ${originalLength}, New: ${cleanedBase64Audio.length}`);
             }
+            // Base64 Padding: Ensure length is multiple of 4
+            const padding = '='.repeat((4 - cleanedBase64Audio.length % 4) % 4);
+            if (padding.length > 0) {
+                cleanedBase64Audio += padding;
+                console.log(`DEBUG: (processAudio) Added ${padding.length} padding characters. New length: ${cleanedBase64Audio.length}`);
+            }
+            // --- End Cleaning and Padding ---
 
-            console.log(`DEBUG: Final cleaned base64Audio START: ${cleanedBase64Audio.substring(0, 100)}`);
-            console.log(`DEBUG: Final cleaned base64Audio END: ${cleanedBase64Audio.substring(cleanedBase64Audio.length - 50)}`);
-            // --- END MODIFIED BLOCK ---
+            console.log(`DEBUG: (processAudio) Final cleaned/padded length: ${cleanedBase64Audio.length}`);
 
-            // --- EXISTING SIZE LOGGING (Update to use cleaned data) ---
-            console.log(`DEBUG: processAudioForTranscription - FINAL cleaned base64Audio length: ${cleanedBase64Audio.length} characters.`);
-            const approxSizeMB = (cleanedBase64Audio.length * 6) / 8 / 1024 / 1024; 
-            console.log(`DEBUG: processAudioForTranscription - Approximate binary size: ${approxSizeMB.toFixed(2)} MB`);
-            // --- END EXISTING SIZE LOGGING ---
-
-            // Get the mime type
-            const mimeType = recordResult.value.mimeType || 'audio/wav';
-            console.log('Recording mime type:', mimeType);
+            // Force mimeType to audio/wav for ALL processing
+            const mimeType = 'audio/wav';
+            console.log('(processAudio) Forced mime type:', mimeType);
             
-            // Send to Google Cloud Speech-to-Text API (using the cleaned data)
+            // Send to Google Cloud Speech-to-Text API (using the cleaned data and forced mimeType)
             const transcription = await sendAudioToGoogleSpeech(cleanedBase64Audio, mimeType);
             
             // Update the UI with the transcription
             if (transcription && transcription.trim().length > 0) {
                 transcriptText = transcription;
-                transcriptionResult.textContent = transcriptText;
-                // Send for summarization
-                await sendTranscriptionForSummary(transcriptText);
+                transcriptionResult.textContent = transcriptText; // Keep original UI update
+                await sendTranscriptionForSummary(transcriptText); // Send for summary
             } else {
                 showErrorMessage('No speech detected. Please try again and speak clearly.');
             }
@@ -234,7 +232,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             console.error('Error processing audio:', err);
             showErrorMessage('Error transcribing audio: ' + err.message);
         } finally {
-            // Reset recording state
             processingStatus.classList.add('hidden');
         }
     }
@@ -387,6 +384,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Bind click event after initialization
     recordButton.addEventListener('click', toggleRecording);
+    stopButton.addEventListener('click', stopRecording);
     
     // Toggle recording state
     async function toggleRecording() {
@@ -656,4 +654,79 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     window.runGoogleApiConnectionTest = runGoogleApiConnectionTest; // Make accessible globally if needed
     // --- END TEMPORARY DEBUGGING ---
+
+    // Event listener for the WAV test button
+    testWavButton.addEventListener('click', () => {
+        if (lastRecordResult) {
+            console.log("DEBUG: 'Transcribe as WAV' button clicked. Processing last recording.");
+            // Use the new function to process specifically as WAV
+            processRecordingAsWav(lastRecordResult);
+        } else {
+            showErrorMessage("No recording available to test as WAV. Please record first.");
+        }
+    });
+
+    // Event listener for file input change
+    audioFileInput.addEventListener('change', (event) => {
+        selectedFile = event.target.files[0];
+        if (selectedFile) {
+            fileInfo.textContent = `Selected: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`;
+            processUploadButton.disabled = false; // Enable the process button
+            console.log(`File selected: ${selectedFile.name}, Type: ${selectedFile.type}, Size: ${selectedFile.size}`);
+        } else {
+            fileInfo.textContent = 'No file selected';
+            processUploadButton.disabled = true; // Disable if no file
+            console.log('File selection cancelled or no file chosen.');
+        }
+    });
+
+    // Event listener for processing uploaded file
+    processUploadButton.addEventListener('click', async () => {
+        if (!selectedFile) {
+            showErrorMessage("Please select an audio file first.");
+            return;
+        }
+
+        console.log(`Processing uploaded file: ${selectedFile.name}`);
+        showStatus('Processing uploaded file...');
+        processingStatus.classList.remove('hidden');
+        errorMessage.classList.add('hidden'); // Hide previous errors
+        transcriptionResult.textContent = '...'; // Reset UI
+        summaryResult.textContent = '...';
+
+        try {
+            const reader = new FileReader();
+            reader.onload = async (event) => {
+                const base64AudioDataUrl = event.target.result;
+                console.log(`File read successfully. Data URL length: ${base64AudioDataUrl.length}`);
+                
+                // Extract base64 part (remove data:audio/...;base64,)
+                const base64Audio = base64AudioDataUrl.split(',')[1];
+                if (!base64Audio) {
+                   throw new Error('Could not extract Base64 data from file.');
+                }
+                console.log(`Extracted Base64 length: ${base64Audio.length}`);
+
+                // Simulate the structure expected by processAudioForTranscription
+                const simulatedRecordResult = {
+                    value: {
+                        recordDataBase64: base64Audio
+                        // mimeType is ignored now, as processAudioForTranscription forces audio/wav
+                    }
+                };
+
+                // Use the main processing function (which now handles WAV forcing and padding)
+                await processAudioForTranscription(simulatedRecordResult);
+            };
+            reader.onerror = (event) => {
+                console.error("Error reading file:", event.target.error);
+                throw new Error('Failed to read the selected file.');
+            };
+            reader.readAsDataURL(selectedFile); // Read file as Base64 Data URL
+        } catch (err) {
+            console.error('Error processing uploaded file:', err);
+            showErrorMessage('Error processing file: ' + err.message);
+            processingStatus.classList.add('hidden');
+        }
+    });
 }); 

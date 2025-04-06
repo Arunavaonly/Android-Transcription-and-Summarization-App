@@ -79,6 +79,16 @@
                     Microphone access needed - Please tap "Allow" on the permission prompt
                 </div>
                 <button id="testApiButton" style="margin-top: 10px; padding: 8px; background-color: yellow;">Test API Conn</button>
+                <button id="testExternalButton" style="margin-top: 10px; padding: 8px; background-color: lightblue;">Test External API</button>
+                <button id="transcribeWavButton" style="margin-top: 10px; padding: 8px; background-color: lightgreen;">Transcribe as WAV</button>
+                 
+                <!-- File Upload Section -->
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ccc;">
+                    <label for="audioFileInput" style="display: block; margin-bottom: 5px;">Upload Audio File:</label>
+                    <input type="file" id="audioFileInput" accept="audio/*" style="display: block; margin-bottom: 5px;">
+                    <button id="processUploadButton" style="padding: 8px; background-color: orange;">Process Uploaded Audio</button>
+                    <span id="fileInfo" style="margin-left: 10px; font-style: italic;"></span>
+                </div>
             </div>
 
             <div class="results-container">

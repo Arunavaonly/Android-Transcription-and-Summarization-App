@@ -22,54 +22,59 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize Capacitor if available
     async function initCapacitor() {
         try {
-            if (window.Capacitor) {
+            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
                 capacitorAvailable = true;
-                console.log('Capacitor is available');
+                console.log('Capacitor is available on native platform');
                 
-                // Import Capacitor plugins
-                const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
-                speechRecognitionPlugin = SpeechRecognition;
-                
-                // Check for permissions
-                try {
-                    const { available } = await speechRecognitionPlugin.available();
-                    if (!available) {
-                        showErrorMessage('Speech recognition is not available on this device');
-                        recordButton.disabled = true;
-                        return;
-                    }
+                // Use global plugin instead of dynamic import
+                if (window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition) {
+                    speechRecognitionPlugin = window.Capacitor.Plugins.SpeechRecognition;
+                    console.log('Speech Recognition plugin found');
                     
-                    // Check permission status
-                    const permissionStatus = await speechRecognitionPlugin.hasPermission();
-                    if (!permissionStatus.permission) {
-                        permissionMessage.classList.remove('hidden');
-                    }
-                    
-                    // Set up listeners for speech recognition
-                    speechRecognitionPlugin.addListener('partialResults', (data) => {
-                        if (data && data.matches && data.matches.length > 0) {
-                            const latestResult = data.matches[0];
-                            updateTranscription(latestResult);
+                    // Check for permissions
+                    try {
+                        const { available } = await speechRecognitionPlugin.available();
+                        if (!available) {
+                            showErrorMessage('Speech recognition is not available on this device');
+                            recordButton.disabled = true;
+                            return;
                         }
-                    });
-                    
-                    speechRecognitionPlugin.addListener('finalResults', (data) => {
-                        if (data && data.matches && data.matches.length > 0) {
-                            const finalResult = data.matches[0];
-                            addToTranscription(finalResult);
+                        
+                        // Check permission status
+                        const permissionStatus = await speechRecognitionPlugin.hasPermission();
+                        if (!permissionStatus.permission) {
+                            permissionMessage.classList.remove('hidden');
                         }
-                    });
-                } catch (err) {
-                    console.error('Speech recognition init error:', err);
-                    showErrorMessage('Could not initialize speech recognition');
+                        
+                        // Set up listeners for speech recognition
+                        speechRecognitionPlugin.addListener('partialResults', (data) => {
+                            if (data && data.matches && data.matches.length > 0) {
+                                const latestResult = data.matches[0];
+                                updateTranscription(latestResult);
+                            }
+                        });
+                        
+                        speechRecognitionPlugin.addListener('finalResults', (data) => {
+                            if (data && data.matches && data.matches.length > 0) {
+                                const finalResult = data.matches[0];
+                                addToTranscription(finalResult);
+                            }
+                        });
+                    } catch (err) {
+                        console.error('Speech recognition init error:', err);
+                        showErrorMessage('Could not initialize speech recognition');
+                    }
+                } else {
+                    console.error('Speech Recognition plugin not found in Capacitor.Plugins');
+                    showErrorMessage('Speech recognition plugin not found');
                 }
             } else {
-                console.warn('Capacitor is not available - you need to build an APK');
+                console.warn('Capacitor is not available or not on native platform - you need to build an APK');
                 showErrorMessage('Native speech recognition requires app installation. This is a preview only.');
             }
         } catch (err) {
             console.error('Capacitor initialization error:', err);
-            showErrorMessage('Error initializing speech recognition');
+            showErrorMessage('Error initializing speech recognition: ' + err.message);
         }
     }
     
@@ -83,6 +88,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function toggleRecording() {
         if (!capacitorAvailable) {
             showErrorMessage('This is a preview only. Build and install the app for full functionality.');
+            return;
+        }
+        
+        if (!speechRecognitionPlugin) {
+            showErrorMessage('Speech recognition plugin not initialized properly.');
             return;
         }
         

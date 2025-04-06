@@ -10,132 +10,188 @@ document.addEventListener('DOMContentLoaded', async () => {
     const transcriptionResult = document.getElementById('transcriptionResult');
     const summaryResult = document.getElementById('summaryResult');
   
-    // API endpoint
-    const API_URL = 'https://trans-and-sum-project.el.r.appspot.com/summarize';
-  
+    // API endpoint for summarization
+    const SUMMARY_API_URL = 'https://trans-and-sum-project.el.r.appspot.com/summarize';
+    
+    // Google Cloud Speech-to-Text API endpoint
+    const GOOGLE_SPEECH_API_URL = 'https://speech.googleapis.com/v1/speech:recognize';
+    // Read API key from environment or an injected configuration
+    const GOOGLE_API_KEY = window.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY || ''; 
+    
     // App state
     let isRecording = false;
+    let audioRecorder = null;
+    let audioChunks = [];
     let transcriptText = '';
     let capacitorAvailable = false;
-    let speechRecognitionPlugin = null;
-    let transcriptParts = [];  // Store individual transcript segments
-    let restartCount = 0;      // Track restart attempts
-  
-    // Initialize Capacitor if available
+    let recordingInterval = null;
+    let recordingStartTime = null;
+
+    // Initialize Capacitor plugins
     async function initCapacitor() {
         try {
             if (window.Capacitor && window.Capacitor.isNativePlatform()) {
                 capacitorAvailable = true;
                 console.log('Capacitor is available on native platform');
                 
-                // Use global plugin instead of dynamic import
-                if (window.Capacitor.Plugins && window.Capacitor.Plugins.SpeechRecognition) {
-                    speechRecognitionPlugin = window.Capacitor.Plugins.SpeechRecognition;
-                    console.log('Speech Recognition plugin found');
+                // Check if HTTP plugin is available
+                if (window.Capacitor.Plugins && window.Capacitor.Plugins.Http) {
+                    console.log('HTTP plugin found');
                     
-                    // Check for permissions
-                    try {
-                        const { available } = await speechRecognitionPlugin.available();
-                        if (!available) {
-                            showErrorMessage('Speech recognition is not available on this device');
-                            recordButton.disabled = true;
-                            return;
-                        }
-                        
-                        // Check permission status
-                        const permissionStatus = await speechRecognitionPlugin.hasPermission();
-                        if (permissionStatus && !permissionStatus.permission) {
-                            permissionMessage.classList.remove('hidden');
-                        }
-                        
-                        // Set up listeners for speech recognition
-                        speechRecognitionPlugin.addListener('partialResults', (data) => {
-                            if (data && data.matches && data.matches.length > 0) {
-                                const latestResult = data.matches[0];
-                                updateTranscription(latestResult);
-                            }
-                        });
-                        
-                        speechRecognitionPlugin.addListener('finalResults', (data) => {
-                            // Reset restart counter on successful recognition
-                            restartCount = 0;
-                            
-                            if (data?.matches?.length) {
-                                const finalResult = data.matches[0];
-                                addToTranscription(finalResult);
-                                console.log(`Added text: "${finalResult}"`);
-                            }
-                            
-                            // Restart immediately for continuous listening
-                            if (isRecording) {
-                                console.log('Recognition finished, restarting automatically');
-                                startRecognitionAttempt();
-                            }
-                        });
-                          
-                        // Add error listener with better error handling
-                        speechRecognitionPlugin.addListener('error', (error) => {
-                            console.error('Speech recognition error:', error);
-                            
-                            // All "No match" errors are transient - just restart
-                            if (isRecording) {
-                                // Increment restart counter
-                                restartCount++;
-                                console.log(`Recognition error (attempt ${restartCount}): ${error.message}`);
-                                
-                                // Longer delay between restarts to help prevent rapid failures
-                                const delayMs = Math.min(1000, 300 + (restartCount * 100));
-                                
-                                setTimeout(() => {
-                                    if (isRecording) {
-                                        console.log(`Restarting recognition after error (delay: ${delayMs}ms)`);
-                                        startRecognitionAttempt();
-                                    }
-                                }, delayMs);
-                            }
-                        });
-                    } catch (err) {
-                        console.error('Speech recognition init error:', err);
-                        showErrorMessage('Could not initialize speech recognition');
-                    }
+                    // Setup audio recorder once HTTP plugin is confirmed
+                    setupAudioRecorder();
                 } else {
-                    console.error('Speech Recognition plugin not found in Capacitor.Plugins');
-                    showErrorMessage('Speech recognition plugin not found');
+                    console.error('HTTP plugin not found in Capacitor.Plugins');
+                    showErrorMessage('HTTP plugin not found - required for API calls');
                 }
             } else {
                 console.warn('Capacitor is not available or not on native platform - you need to build an APK');
-                showErrorMessage('Native speech recognition requires app installation. This is a preview only.');
+                showErrorMessage('Native features require app installation. This is a preview only.');
             }
         } catch (err) {
             console.error('Capacitor initialization error:', err);
-            showErrorMessage('Error initializing speech recognition: ' + err.message);
+            showErrorMessage('Error initializing app capabilities: ' + err.message);
         }
     }
     
-    // Start a single recognition attempt
-    async function startRecognitionAttempt() {
-        if (!isRecording) return;
-        
+    // Setup the audio recorder
+    function setupAudioRecorder() {
         try {
-            console.log('Starting recognition attempt');
-            await speechRecognitionPlugin.start({
-                language: 'en-US',
-                partialResults: true,
-                profanityFilter: false
-            });
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    const audioContext = new AudioContext();
+                    const audioStreamSource = audioContext.createMediaStreamSource(stream);
+                    
+                    // Create media recorder
+                    audioRecorder = new MediaRecorder(stream);
+                    audioRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+                    
+                    // Handle recording stopped
+                    audioRecorder.onstop = async () => {
+                        // Process the audio chunks here
+                        if (audioChunks.length > 0) {
+                            await processAudioForTranscription();
+                        }
+                    };
+                })
+                .catch(err => {
+                    console.error('Error accessing audio stream:', err);
+                    showErrorMessage('Microphone access denied: ' + err.message);
+                    permissionMessage.classList.remove('hidden');
+                });
         } catch (err) {
-            console.error('Error starting recognition attempt:', err);
-            if (isRecording) {
-                // If we fail to start, try again after a delay
-                setTimeout(startRecognitionAttempt, 1000);
+            console.error('Error setting up audio recorder:', err);
+            showErrorMessage('Could not set up audio recording: ' + err.message);
+        }
+    }
+    
+    // Process recorded audio and send for transcription
+    async function processAudioForTranscription() {
+        try {
+            // Create blob from audio chunks
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+            
+            // Convert to base64
+            const base64Audio = await blobToBase64(audioBlob);
+            
+            // Send to Google Cloud Speech-to-Text API
+            const transcription = await sendAudioToGoogleSpeech(base64Audio);
+            
+            // Update the UI with the transcription
+            if (transcription && transcription.trim().length > 0) {
+                transcriptText = transcription;
+                transcriptionResult.textContent = transcriptText;
+                // Send for summarization
+                await sendTranscriptionForSummary(transcriptText);
+            } else {
+                showErrorMessage('No speech detected. Please try again and speak clearly.');
             }
+        } catch (err) {
+            console.error('Error processing audio:', err);
+            showErrorMessage('Error transcribing audio: ' + err.message);
+        } finally {
+            // Reset recording state
+            audioChunks = [];
+            processingStatus.classList.add('hidden');
+        }
+    }
+    
+    // Convert Blob to Base64
+    function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                // Remove the data URL prefix (e.g., "data:audio/webm;base64,")
+                const base64String = reader.result.split(',')[1];
+                resolve(base64String);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+    
+    // Send audio to Google Cloud Speech-to-Text API
+    async function sendAudioToGoogleSpeech(base64Audio) {
+        try {
+            // Prepare the request payload
+            const requestData = {
+                config: {
+                    encoding: 'WEBM_OPUS',
+                    sampleRateHertz: 48000,
+                    languageCode: 'en-US',
+                    model: 'default',
+                    enableAutomaticPunctuation: true,
+                },
+                audio: {
+                    content: base64Audio
+                }
+            };
+            
+            // Make the API request
+            const options = {
+                url: `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`,
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                data: JSON.stringify(requestData)
+            };
+            
+            const response = await window.Capacitor.Plugins.Http.request({
+                method: 'POST',
+                ...options
+            });
+            
+            // Parse the response
+            if (response.status === 200) {
+                const data = JSON.parse(response.data);
+                if (data && data.results && data.results.length > 0) {
+                    // Combine all transcriptions
+                    return data.results
+                        .map(result => result.alternatives[0].transcript)
+                        .join(' ');
+                } else {
+                    console.warn('No transcription results in API response');
+                    return '';
+                }
+            } else {
+                console.error('Google Speech API error:', response.data);
+                throw new Error(`Google Speech API error: ${response.status} - ${response.data}`);
+            }
+        } catch (err) {
+            console.error('Error sending audio to Google Speech API:', err);
+            throw err;
         }
     }
     
     // Initialize app
     await initCapacitor();
     
-    // Only bind click event after initialization
+    // Bind click event after initialization
     recordButton.addEventListener('click', toggleRecording);
     
     // Toggle recording state
@@ -145,8 +201,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             return;
         }
         
-        if (!speechRecognitionPlugin) {
-            showErrorMessage('Speech recognition plugin not initialized properly.');
+        if (!audioRecorder) {
+            showErrorMessage('Audio recorder not initialized properly.');
             return;
         }
         
@@ -162,61 +218,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
     }
     
-    // Start recording with native plugin
+    // Start recording
     async function startRecording() {
         // Clear any previous error messages
         hideErrorMessage();
         
         // Reset transcript and UI
         transcriptText = '';
-        transcriptParts = [];
-        restartCount = 0;
+        audioChunks = [];
         transcriptionResult.textContent = 'Listening...';
         summaryResult.textContent = 'Your summary will appear here';
         
         try {
-            // Check and request permissions if needed
-            const permissionStatus = await speechRecognitionPlugin.hasPermission();
-            console.log('Permission status:', permissionStatus);
-
-            const hasPerm = permissionStatus?.permission === true;
-            if (!hasPerm) {
-                console.log('Requesting microphone permission...');
-                permissionMessage.classList.remove('hidden');
-                // On Android this returns void, so we don't inspect the return value
-                await speechRecognitionPlugin.requestPermission();
-                permissionMessage.classList.add('hidden');
-        }
-
+            // Start recording
+            audioRecorder.start(1000); // Collect data every second
+            recordingStartTime = Date.now();
             
-            // Start recording with the native plugin
-            await speechRecognitionPlugin.start({
-                language: 'en-US',
-                partialResults: true,
-                profanityFilter: false
-            });
-            
-            // Update UI state
+            // Start recording indicator
             isRecording = true;
             updateUIForRecording(true);
-            permissionMessage.classList.add('hidden');
             
-            // Start first recognition attempt
-            await startRecognitionAttempt();
+            // Add a recording interval to show time
+            recordingInterval = setInterval(() => {
+                const elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
+                const minutes = Math.floor(elapsedSeconds / 60);
+                const seconds = elapsedSeconds % 60;
+                recordingStatus.textContent = `Recording... ${minutes}:${seconds.toString().padStart(2, '0')}`;
+            }, 1000);
+            
         } catch (err) {
             console.error('Start recording error:', err);
             isRecording = false;
             updateUIForRecording(false);
-            
-            // Don't show error if it's just a first-time permission request
-            const errorIsJustPermissionRequest = err.message && (
-                err.message.includes('permission') || 
-                err.message.includes('Permission')
-            );
-            
-            if (!errorIsJustPermissionRequest) {
-                showErrorMessage('Could not start speech recognition: ' + err.message);
-            }
+            showErrorMessage('Could not start recording: ' + err.message);
         }
     }
     
@@ -226,49 +260,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         isRecording = false;
         updateUIForRecording(false);
+        processingStatus.classList.remove('hidden');
+        
+        // Clear the recording interval
+        if (recordingInterval) {
+            clearInterval(recordingInterval);
+            recordingInterval = null;
+        }
         
         try {
-            console.log('Stopping speech recognition');
-            await speechRecognitionPlugin.stop();
-            console.log('Speech recognition stopped');
-            
-            // CRITICAL FIX: Always send whatever transcript we have to the API
-            // Only check if we have any text at all
-            if (transcriptText && transcriptText.trim().length > 0) {
-                console.log(`Transcription complete (${transcriptText.length} chars): "${transcriptText}"`);
-                processingStatus.classList.remove('hidden');
-                sendTranscriptionForSummary(transcriptText);
-            } else {
-                console.warn('No transcription captured');
-                showErrorMessage('No speech detected. Please try again and speak clearly.');
-            }
+            console.log('Stopping audio recording');
+            audioRecorder.stop();
+            console.log('Audio recording stopped, processing...');
         } catch (err) {
             console.error('Stop recording error:', err);
-            
-            // EVEN if stop fails, still try to send whatever transcription we have
-            if (transcriptText && transcriptText.trim().length > 0) {
-                console.log(`Sending transcription despite stop error: ${transcriptText}`);
-                processingStatus.classList.remove('hidden');
-                sendTranscriptionForSummary(transcriptText);
-            } else {
-                showErrorMessage('Error stopping recording: ' + err.message);
-            }
-        }
-    }
-    
-    // Update transcription with interim results
-    function updateTranscription(text) {
-        transcriptionResult.textContent = transcriptText + ' ' + text;
-        transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
-    }
-    
-    // Add final results to the transcript
-    function addToTranscription(text) {
-        if (text && text.trim()) {
-            transcriptParts.push(text.trim());
-            transcriptText = transcriptParts.join(' ');
-            transcriptionResult.textContent = transcriptText;
-            transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+            processingStatus.classList.add('hidden');
+            showErrorMessage('Error stopping recording: ' + err.message);
         }
     }
     
@@ -304,13 +311,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         errorMessage.textContent = '';
     }
     
-    // Send to backend & disable button while processing
+    // Send transcription to backend for summarization
     async function sendTranscriptionForSummary(text) {
         recordButton.disabled = true;
         processingStatus.classList.remove('hidden');
         
         console.log(`Sending text to API: ${text.substring(0, 50)}... (length: ${text.length})`);
-        console.log(`API URL: ${API_URL}`);
+        console.log(`API URL: ${SUMMARY_API_URL}`);
         
         try {
             // Check if we have valid text to send
@@ -319,51 +326,37 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             
             const requestData = { text };
-            console.log('Request payload:', requestData);
             
-            const res = await fetch(API_URL, {
+            // Make the API request using Capacitor HTTP plugin
+            const response = await window.Capacitor.Plugins.Http.request({
                 method: 'POST',
+                url: SUMMARY_API_URL,
                 headers: {
                     'Content-Type': 'application/json',
                     'Accept': 'application/json'
                 },
-                body: JSON.stringify(requestData),
-                mode: 'cors'
+                data: JSON.stringify(requestData)
             });
             
-            console.log(`API response status: ${res.status}`);
+            console.log(`API response status: ${response.status}`);
             
-            if (!res.ok) {
-                let errorDetail = '';
-                try {
-                    const errorText = await res.text();
-                    errorDetail = errorText;
-                    console.error('API error response:', errorText);
-                } catch (e) {
-                    errorDetail = 'Unable to get error details';
-                }
-                
-                if (res.status === 0 || res.status === 403) {
-                    throw new Error('CORS error - API server may be blocking requests from this app');
-                } else {
-                    throw new Error(res.statusText || `Server error (${res.status}): ${errorDetail}`);
-                }
+            if (response.status !== 200) {
+                throw new Error(`Server error (${response.status}): ${response.data}`);
             }
             
-            let data;
             try {
-                data = await res.json();
+                const data = JSON.parse(response.data);
                 console.log('API response data:', data);
+                
+                if (data && data.summary) {
+                    summaryResult.textContent = data.summary;
+                } else {
+                    summaryResult.textContent = 'No summary returned from API';
+                    console.error('No summary in API response', data);
+                }
             } catch (e) {
                 console.error('Error parsing API response as JSON:', e);
                 throw new Error('Invalid response from server (not JSON)');
-            }
-            
-            if (data && data.summary) {
-                summaryResult.textContent = data.summary;
-            } else {
-                summaryResult.textContent = 'No summary returned from API';
-                console.error('No summary in API response', data);
             }
         } catch (err) {
             console.error('API call error:', err);

@@ -31,6 +31,7 @@ android/app/src/main/assets/public/
 .env
 .env.*
 !.env.example
+public/api-config.js
 
 # Build folders
 dist/

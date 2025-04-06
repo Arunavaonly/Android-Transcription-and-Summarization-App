@@ -12,9 +12,13 @@
       "backgroundColor": "#f5f5f5",
       "androidSplashResourceName": "splash"
     },
-    "SpeechRecognition": {
-      "androidPermissions": [
-        "android.permission.RECORD_AUDIO"
+    "Http": {
+      "enabled": true
+    },
+    "Permissions": {
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
       ]
     }
   },

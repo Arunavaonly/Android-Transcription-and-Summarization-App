@@ -4,10 +4,10 @@ This is a mobile version of the Voice Transcription and Summarization app, built
 
 ## Features
 
-- Native speech recognition using Android's built-in capabilities
+- Native speech recognition using Google Cloud Speech-to-Text API
 - Transcription of spoken text
 - Summarization using the backend API
-- Works offline for the transcription part
+- Works on Android devices
 
 ## Setup and Build Instructions
 
@@ -48,6 +48,15 @@ This is a mobile version of the Voice Transcription and Summarization app, built
 
 3. The APK will be available at `android/app/build/outputs/apk/debug/app-debug.apk`
 
+### Building with GitHub Actions
+
+This project includes GitHub Actions workflows to automatically build the APK. To set it up:
+
+1. Fork or clone this repository to your GitHub account
+2. Set up a GitHub Secret named `GOOGLE_API_KEY` with your Google Cloud Speech-to-Text API key
+3. Push to the main branch to trigger the build, or manually trigger the workflow
+4. Download the APK from the workflow artifacts
+
 ### Testing the Web Version
 
 You can test the web version (without native features) using:
@@ -65,6 +74,7 @@ This will serve the app on http://localhost:3000
 
 ## Notes
 
-- The app uses native Android speech recognition instead of Web Speech API
+- The app uses Google Cloud Speech-to-Text API for recognition
+- You need a valid Google Cloud API key with Speech-to-Text permissions 
 - The summarization requires an internet connection to connect to the backend API
 - The app will request microphone permissions on first use 

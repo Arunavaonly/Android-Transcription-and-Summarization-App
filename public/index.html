@@ -2,15 +2,15 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Voice Transcription & Summary</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Transcription & Summarization</title>
     <link rel="stylesheet" href="styles.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>Voice Transcription</h1>
+            <h1>Voice Transcription & Summarization</h1>
             <p>Speak, transcribe, and get an instant summary</p>
         </header>
 
@@ -21,27 +21,10 @@
                     <span>Start Recording</span>
                 </button>
                 <div id="recordingStatus" class="status hidden">Recording...</div>
-                <div id="processingStatus" class="status hidden">Processing...</div>
-                <div id="errorMessage" class="error-message hidden"></div>
-                <div id="permissionMessage" class="status hidden">
-                    <i class="fas fa-microphone-slash"></i> 
-                    Microphone access needed - Please tap "Allow" on the permission prompt
+                <div id="processingStatus" class="status hidden">
+                    <i class="fas fa-spinner fa-spin"></i> <span id="statusText">Processing...</span>
                 </div>
-            </div>
-            <button id="testApiButton" style="margin-top: 10px; padding: 8px; background-color: yellow;">Test API Conn</button>
-            <button id="testExternalButton" style="margin-top: 10px; padding: 8px; background-color: lightblue;">Test External API</button>
-            <button id="transcribeWavButton" style="margin-top: 10px; padding: 8px; background-color: lightgreen;">Transcribe as WAV</button>
-             
-            <!-- File Upload Section -->
-            <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ccc;">
-                <label for="audioFileInput" style="display: block; margin-bottom: 5px;">Upload Audio File:</label>
-                <input type="file" id="audioFileInput" accept="audio/*" style="display: block; margin-bottom: 5px;">
-                <button id="processUploadButton" style="padding: 8px; background-color: orange;">Process Uploaded Audio</button>
-                <span id="fileInfo" style="margin-left: 10px; font-style: italic;"></span>
-            </div>
-        </div>
-
-                
+                <div id="errorMessage" class="error-message hidden"></div>
             </div>
 
             <div class="results-container">
@@ -53,16 +36,17 @@
                 <div class="result-box">
                     <h2>Summary</h2>
                     <div id="summaryResult" class="result-content">Your summary will appear here</div>
+                    <div id="summaryControls" class="result-controls"></div>
                 </div>
             </div>
         </main>
 
         <footer>
-            <p>© 2025 Voice Transcription & Summary App</p>
+            <p>© 2025 Voice Transcription & Summarization App</p>
         </footer>
     </div>
 
-    <script src="capacitor.js"></script>
+    <script src="config.js"></script>
     <script src="app.js"></script>
 </body>
-</html> 
+</html>

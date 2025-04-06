@@ -1,732 +1,544 @@
-document.addEventListener('DOMContentLoaded', async () => {
-    // DOM elements
+import { Capacitor } from '@capacitor/core';
+// Removed VoiceRecorder import
+// Use Capacitor Permissions for a smoother check before browser prompt
+import { Permissions } from '@capacitor/permissions';
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Capacitor check - Keep this for native-specific logic or info
+    // if (!Capacitor.isNativePlatform()) { ... } // Existing check is fine
+
+    // DOM elements (ensure these IDs exist in your HTML)
     const recordButton = document.getElementById('recordButton');
-    const recordButtonText = recordButton.querySelector('span');
-    const recordButtonIcon = recordButton.querySelector('i');
-    const recordingStatus = document.getElementById('recordingStatus');
-    const processingStatus = document.getElementById('processingStatus');
+    const recordButtonText = recordButton ? recordButton.querySelector('span') : null;
+    const recordButtonIcon = recordButton ? recordButton.querySelector('i') : null;
+    const recordingStatus = document.getElementById('recordingStatus'); // Shows "Recording..."
+    const processingStatus = document.getElementById('processingStatus'); // Shows spinner + status text
+    const statusText = document.getElementById('statusText'); // Add this element in HTML
     const errorMessage = document.getElementById('errorMessage');
-    const permissionMessage = document.getElementById('permissionMessage');
+    // No longer needed: const audioInfo = document.getElementById('audioInfo');
     const transcriptionResult = document.getElementById('transcriptionResult');
     const summaryResult = document.getElementById('summaryResult');
-    const stopButton = document.getElementById('stopButton');
-    const statusMessage = document.getElementById('statusMessage');
-    const summaryProcessingStatus = document.getElementById('summaryProcessingStatus');
-    const testWavButton = document.getElementById('testWavButton');
-    const audioFileInput = document.getElementById('audioFileInput');
-    const processUploadButton = document.getElementById('processUploadButton');
-    const fileInfo = document.getElementById('fileInfo');
-  
-    // API endpoint for summarization
-    const SUMMARY_API_URL = 'https://trans-and-sum-project.el.r.appspot.com/summarize';
-    
-    // Google Cloud Speech-to-Text API endpoint
-    const GOOGLE_SPEECH_API_URL = 'https://speech.googleapis.com/v1/speech:recognize';
-    // Read API key from environment or an injected configuration
-    const GOOGLE_API_KEY = window.GOOGLE_API_KEY || process.env.GOOGLE_API_KEY || ''; 
-    
+    const summaryControls = document.getElementById('summaryControls'); // Add this element in HTML
+
+    // Use the provided backend URL directly
+    const API_BASE_URL = 'https://trans-and-sum-project.el.r.appspot.com';
+
+    // --- Web Speech API Setup --- Check for support early
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+
+    if (!SpeechRecognition) {
+        // Use the existing showErrorMessage function
+        showErrorMessage('Speech recognition not supported by this browser/WebView. Please use Chrome, Edge, or Safari.');
+        if (recordButton) recordButton.disabled = true;
+        // Hide elements that rely on speech recognition if needed
+        // document.getElementById('someContainer').style.display = 'none';
+        return; // Stop initialization
+    }
+    console.log("Web Speech API is supported.");
+
     // App state
     let isRecording = false;
-    let transcriptText = '';
-    let capacitorAvailable = false;
-    let recordingInterval = null;
-    let recordingStartTime = null;
-    let voiceRecorderAvailable = false;
-    let recorder = null;
-    let audioChunks = [];
-    let lastRecordResult = null;
-    let selectedFile = null;
+    // Removed recordedAudioData
+    let transcriptText = ''; // Store final transcript
 
-    // Get access to Voice Recorder plugin with fallbacks
-    function getVoiceRecorderPlugin() {
-        // Try different ways to access the plugin
-        if (window.Capacitor && window.Capacitor.Plugins) {
-            // Try standard Capacitor.Plugins.VoiceRecorder
-            if (window.Capacitor.Plugins.VoiceRecorder) {
-                console.log('Using VoiceRecorder from Capacitor.Plugins');
-                return window.Capacitor.Plugins.VoiceRecorder;
-            }
-            
-            // Try other potential names
-            if (window.Capacitor.Plugins['VoiceRecorder']) {
-                console.log('Using VoiceRecorder from Capacitor.Plugins["VoiceRecorder"]');
-                return window.Capacitor.Plugins['VoiceRecorder'];
-            }
-            
-            if (window.Capacitor.Plugins['capacitor-voice-recorder']) {
-                console.log('Using VoiceRecorder from Capacitor.Plugins["capacitor-voice-recorder"]');
-                return window.Capacitor.Plugins['capacitor-voice-recorder'];
-            }
-            
-            // Try case variations
-            const pluginKeys = Object.keys(window.Capacitor.Plugins);
-            console.log('Available plugin keys:', pluginKeys);
-            
-            const voiceRecorderKey = pluginKeys.find(key => 
-                key.toLowerCase().includes('voice') || 
-                key.toLowerCase().includes('record')
-            );
-            
-            if (voiceRecorderKey) {
-                console.log(`Using VoiceRecorder from alternate key: ${voiceRecorderKey}`);
-                return window.Capacitor.Plugins[voiceRecorderKey];
-            }
-        }
-        
-        // Try global
-        if (typeof VoiceRecorder !== 'undefined') {
-            console.log('Using VoiceRecorder from global scope');
-            return VoiceRecorder;
-        }
-        
-        // Check for other naming in global scope
-        if (typeof capacitorVoiceRecorder !== 'undefined') {
-            console.log('Using capacitorVoiceRecorder from global scope');
-            return capacitorVoiceRecorder;
-        }
-        
-        console.error('Voice Recorder plugin not found in any namespace');
-        return null;
-    }
-    
-    // Initialize Capacitor plugins
-    async function initCapacitor() {
-        try {
-            if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-                capacitorAvailable = true;
-                console.log('Capacitor is available on native platform');
-                
-                // Log all available plugins for debugging
-                console.log('Available Capacitor Plugins:', window.Capacitor.Plugins ? Object.keys(window.Capacitor.Plugins) : 'None');
-                
-                // Check for required plugins
-                if (window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp) {
-                    console.log('HTTP plugin found');
-                    
-                    // Try to get Voice Recorder plugin with fallbacks
-                    const voiceRecorderPlugin = getVoiceRecorderPlugin();
-                    
-                    if (voiceRecorderPlugin) {
-                        voiceRecorderAvailable = true;
-                        console.log('Voice Recorder plugin found');
-                        
-                        // Use global variable to store plugin reference
-                        window.voiceRecorderPluginRef = voiceRecorderPlugin;
-                        
-                        // Check for permission
-                        await checkMicrophonePermission();
-                    } else {
-                        console.error('Voice Recorder plugin not found in any namespace');
-                        showErrorMessage('Voice Recorder plugin not found - required for audio recording');
-                    }
-                    
-                    console.log('App initialization complete');
-                } else {
-                    console.error('HTTP plugin not found in Capacitor.Plugins');
-                    showErrorMessage('HTTP plugin not found - required for API calls');
-                }
-            } else {
-                console.warn('Capacitor is not available or not on native platform - you need to build an APK');
-                showErrorMessage('Native features require app installation. This is a preview only.');
-            }
-        } catch (err) {
-            console.error('Capacitor initialization error:', err);
-            showErrorMessage('Error initializing app capabilities: ' + err.message);
-        }
-    }
-    
-    // Check and request microphone permission
-    async function checkMicrophonePermission() {
-        try {
-            console.log('Checking microphone permission');
-            
-            // Use the global plugin reference
-            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
-            
-            if (!voiceRecorderPlugin) {
-                throw new Error('Voice Recorder plugin not available');
-            }
-            
-            const permResult = await voiceRecorderPlugin.hasAudioRecordingPermission();
-            
-            if (!permResult.value) {
-                console.log('Requesting microphone permission');
-                permissionMessage.classList.remove('hidden');
-                
-                const requestResult = await voiceRecorderPlugin.requestAudioRecordingPermission();
-                if (!requestResult.value) {
-                    console.error('Microphone permission denied');
-                    showErrorMessage('Microphone access is required for recording.');
-                    return false;
-                }
-                
-                permissionMessage.classList.add('hidden');
-            }
-            
-            console.log('Microphone permission granted');
+    // --- Permission Check (using Capacitor Permissions for native, browser handles its own) ---
+    const checkAndRequestPermissions = async () => {
+        // Only check via Capacitor on actual native platforms
+        if (!Capacitor.isNativePlatform()) {
+            console.log("Running in browser, skipping Capacitor permission check.");
+            // We assume the browser will prompt when recognition.start() is called.
+            // We return true here to allow proceeding to recognition.start().
             return true;
-        } catch (err) {
-            console.error('Error checking/requesting microphone permission:', err);
-            showErrorMessage('Error accessing microphone: ' + err.message);
+        }
+
+        try {
+            console.log("Checking microphone permission via Capacitor...");
+            // Use the specific permission name 'microphone'
+            let permStatus = await Permissions.check({ name: 'microphone' });
+            console.log("Initial permission status:", permStatus.state);
+
+            // If already granted, we're good.
+            if (permStatus.state === 'granted') {
+                return true;
+            }
+
+            // If it's prompt or prompt-with-rationale, attempt to request.
+            if (permStatus.state === 'prompt' || permStatus.state === 'prompt-with-rationale') {
+                console.log("Requesting microphone permission via Capacitor...");
+                permStatus = await Permissions.request({ name: 'microphone' });
+                 console.log("Requested permission status:", permStatus.state);
+                if (permStatus.state === 'granted') {
+                    return true;
+                }
+            }
+
+            // If we reach here, permission is denied.
+            console.warn("Microphone permission denied via Capacitor check.");
+            showErrorMessage('Microphone permission is required. Please grant it in App Settings.');
+            return false;
+
+        } catch (error) {
+            console.error("Capacitor Permission check/request error:", error);
+            // Check if it's an known unimplemented error (e.g., on web)
+            if (error.message && error.message.includes('not implemented')) {
+                console.warn("Capacitor Permissions API not implemented on this platform (likely web), relying on browser prompt.");
+                return true; // Allow proceeding, browser will handle prompt
+            }
+            showErrorMessage('Failed to check/request microphone permissions.');
             return false;
         }
-    }
-    
-    // Process recorded audio and send for transcription
-    async function processAudioForTranscription(recordResult) {
-        try {
-            if (!recordResult || !recordResult.value || !recordResult.value.recordDataBase64) {
-                throw new Error('No recording data available');
-            }
-            
-            // Get the base64 audio data
-            const base64Audio = recordResult.value.recordDataBase64;
-            console.log('Received audio recording, size:', base64Audio.length); 
+    };
 
-            // --- Robust Base64 Cleaning and Padding --- 
-            let cleanedBase64Audio = base64Audio; 
-            // Strip data URI prefix if present
-            if (cleanedBase64Audio && cleanedBase64Audio.startsWith('data:')) {
-                console.warn("DEBUG: (processAudio) base64Audio has data URI prefix. Stripping it.");
-                const commaIndex = cleanedBase64Audio.indexOf(',');
-                if (commaIndex !== -1) {
-                    cleanedBase64Audio = cleanedBase64Audio.substring(commaIndex + 1);
-                } else {
-                     console.error("DEBUG: (processAudio) Found 'data:' prefix but no comma!");
-                }
-            } else {
-                 console.log("DEBUG: (processAudio) base64Audio does not have data URI prefix.");
-            }
-            // Remove potential newlines and whitespace 
-            const originalLength = cleanedBase64Audio.length;
-            cleanedBase64Audio = cleanedBase64Audio.replace(/\s/g, ''); 
-            if (cleanedBase64Audio.length !== originalLength) {
-                console.warn(`DEBUG: (processAudio) Removed whitespace. Orig: ${originalLength}, New: ${cleanedBase64Audio.length}`);
-            }
-            // Base64 Padding: Ensure length is multiple of 4
-            const padding = '='.repeat((4 - cleanedBase64Audio.length % 4) % 4);
-            if (padding.length > 0) {
-                cleanedBase64Audio += padding;
-                console.log(`DEBUG: (processAudio) Added ${padding.length} padding characters. New length: ${cleanedBase64Audio.length}`);
-            }
-            // --- End Cleaning and Padding ---
 
-            console.log(`DEBUG: (processAudio) Final cleaned/padded length: ${cleanedBase64Audio.length}`);
-
-            // Force mimeType to audio/wav for ALL processing
-            const mimeType = 'audio/wav';
-            console.log('(processAudio) Forced mime type:', mimeType);
-            
-            // Send to Google Cloud Speech-to-Text API (using the cleaned data and forced mimeType)
-            const transcription = await sendAudioToGoogleSpeech(cleanedBase64Audio, mimeType);
-            
-            // Update the UI with the transcription
-            if (transcription && transcription.trim().length > 0) {
-                transcriptText = transcription;
-                transcriptionResult.textContent = transcriptText; // Keep original UI update
-                await sendTranscriptionForSummary(transcriptText); // Send for summary
-            } else {
-                showErrorMessage('No speech detected. Please try again and speak clearly.');
-            }
-        } catch (err) {
-            console.error('Error processing audio:', err);
-            showErrorMessage('Error transcribing audio: ' + err.message);
-        } finally {
-            processingStatus.classList.add('hidden');
-        }
-    }
-    
-    // Send audio to Google Cloud Speech-to-Text API
-    async function sendAudioToGoogleSpeech(base64Audio, mimeType) {
-        let retryCount = 0; // Define retryCount here
-        const maxRetries = 2; // Define maxRetries here
-        
-        while (retryCount <= maxRetries) {
-            try {
-                // Determine encoding based on mimeType
-                let encoding = 'LINEAR16'; // Default for native voice recorder
-                let sampleRateHertz = 16000; // Default for most native recordings
-                
-                // Map MIME types to Google Speech API encodings
-                if (mimeType) {
-                    const lowerMimeType = mimeType.toLowerCase();
-                    if (lowerMimeType.includes('wav')) {
-                        encoding = 'LINEAR16';
-                        sampleRateHertz = 16000;
-                    } else if (lowerMimeType.includes('mp4') || lowerMimeType.includes('mpeg')) {
-                        encoding = 'MP3';
-                        sampleRateHertz = 16000;
-                    } else if (lowerMimeType.includes('aac')) {
-                        encoding = 'AMR';
-                        sampleRateHertz = 8000;
-                    } else if (lowerMimeType.includes('webm') && lowerMimeType.includes('opus')) {
-                        encoding = 'WEBM_OPUS';
-                        sampleRateHertz = 48000;
-                    } else if (lowerMimeType.includes('ogg')) {
-                        encoding = 'OGG_OPUS';
-                        sampleRateHertz = 48000;
-                    }
-                }
-                
-                console.log('Using encoding for Google Speech API:', encoding, 'with sample rate:', sampleRateHertz);
-                
-                // Prepare the request payload
-                const requestData = {
-                    config: {
-                        encoding: encoding,
-                        sampleRateHertz: sampleRateHertz,
-                        languageCode: 'en-US',
-                        model: 'default',
-                        enableAutomaticPunctuation: true,
-                        useEnhanced: false,
-                    },
-                    audio: {
-                        content: base64Audio
-                    }
-                };
-                
-                // Define options needed for the request AND logging
-                const options = {
-                    url: `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`,
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    data: JSON.stringify(requestData)
-                };
-
-                // --- TEMPORARY DEBUGGING --- 
-                const finalUrlForSpeechAPI = options.url; // Use url from options
-                console.log(`DEBUG: sendAudioToGoogleSpeech - Attempting API call (${retryCount + 1}/${maxRetries + 1}) to URL: ${finalUrlForSpeechAPI}`); 
-                
-                if (!GOOGLE_API_KEY || GOOGLE_API_KEY.length < 20) {
-                    console.error("DEBUG: sendAudioToGoogleSpeech - API Key seems MISSING or too short just before call!");
-                }
-                
-                const requestOptionsForLogging = {
-                    method: 'POST',
-                    url: finalUrlForSpeechAPI, 
-                    headers: options.headers,  
-                    dataLength: options.data ? options.data.length : 0, 
-                    connectTimeout: 60 + (retryCount * 30), 
-                    readTimeout: 60 + (retryCount * 30)
-                };
-                console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
-                // --- END TEMPORARY DEBUGGING --- 
-    
-                // Make the actual API request call - REVERTING TO FETCH INSTEAD OF CapacitorHttp
-                console.log("DEBUG: Attempting API call using native fetch()...");
-                const fetchOptions = {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json' 
-                    },
-                    body: options.data // options.data should be JSON.stringify(requestData) 
-                };
-
-                const response = await fetch(finalUrlForSpeechAPI, fetchOptions);
-                
-                console.log(`DEBUG: fetch response status: ${response.status}`);
-
-                if (!response.ok) {
-                    let errorBody = await response.text(); 
-                    try { errorBody = JSON.parse(errorBody); } catch (e) { /* Ignore */ }
-                    console.error('Google Speech API error response (fetch):', errorBody);
-                    throw new Error(`Google Speech API error (fetch): ${response.status} ${response.statusText} - Body: ${JSON.stringify(errorBody)}`);
-                }
-
-                const responseDataJson = await response.json();
-                
-                // Parse the response (Success Case)
-                if (responseDataJson && responseDataJson.results && responseDataJson.results.length > 0) {
-                    const transcript = responseDataJson.results
-                        .map(result => result.alternatives[0].transcript)
-                        .join(' ');
-                    console.log('Received transcription (fetch):', transcript.substring(0, 50) + '...');
-                    return transcript; // Return success, exit loop
-                } else {
-                    console.warn('No transcription results in API response (fetch)', responseDataJson);
-                    return ''; // Return success (empty), exit loop
-                }
-                
-            } catch (err) {
-                // --- TEMPORARY DEBUGGING --- 
-                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED (using fetch). Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
-                // --- END TEMPORARY DEBUGGING --- 
-    
-                console.error(`Attempt ${retryCount + 1} failed (fetch):`, err);
-                
-                if (err instanceof TypeError && err.message.toLowerCase().includes('failed to fetch')) {
-                     console.error("Fetch failed likely due to CORS, network error, or DNS issue.");
-                     throw new Error("Fetch network error (CORS/DNS/Connection Refused): " + err.message);
-                 } 
-                
-                if (retryCount < maxRetries) {                    
-                    retryCount++;
-                    console.log(`Retrying request (${retryCount}/${maxRetries}) (will use fetch again)...`);
-                    await new Promise(resolve => setTimeout(resolve, 1500)); 
-                    continue; 
-                }
-                
-                if (err.message?.includes('API key')) {
-                    throw new Error('Invalid or missing API key detected.');
-                }
-                throw err; 
-            }
-        } // End while loop
-        
-        // If the loop finishes without returning or throwing a specific error, it means max retries were exceeded
-        throw new Error("Max retries exceeded for Google Speech API call after " + (maxRetries + 1) + " attempts.");
-    }
-    
-    // Initialize app
-    await initCapacitor();
-    
-    // Bind click event after initialization
-    recordButton.addEventListener('click', toggleRecording);
-    stopButton.addEventListener('click', stopRecording);
-    
-    // Toggle recording state
-    async function toggleRecording() {
-        if (!capacitorAvailable) {
-            showErrorMessage('This is a preview only. Build and install the app for full functionality.');
-            return;
-        }
-        
-        if (!voiceRecorderAvailable) {
-            showErrorMessage('Voice recorder plugin not available.');
-            return;
-        }
-        
-        if (recordButton.hasAttribute('data-processing')) return;
-        recordButton.setAttribute('data-processing', '');
-        
-        try {
-            if (isRecording) {
-                await stopRecording();
-            } else {
-                // First check permission
-                const hasPermission = await checkMicrophonePermission();
-                if (!hasPermission) {
-                    console.error('Permission check failed');
-                    showErrorMessage('Microphone permission is required.');
-                    recordButton.removeAttribute('data-processing');
-                    return;
-                }
-                
-                await startRecording();
-            }
-        } catch (err) {
-            console.error('Toggle recording error:', err);
-            showErrorMessage('Error toggling recording: ' + err.message);
-        } finally {
-            setTimeout(() => recordButton.removeAttribute('data-processing'), 300);
-        }
-    }
-    
-    // Start recording
-    async function startRecording() {
-        // Clear any previous error messages
-        hideErrorMessage();
-        
-        // Reset transcript and UI
-        transcriptText = '';
-        transcriptionResult.textContent = 'Listening...';
-        summaryResult.textContent = 'Your summary will appear here';
-        
-        try {
-            // Use the global plugin reference
-            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
-            
-            if (!voiceRecorderPlugin) {
-                throw new Error('Voice Recorder plugin not available');
-            }
-            
-            // Start recording using the Voice Recorder plugin
-            console.log('Starting voice recording...');
-            await voiceRecorderPlugin.startRecording();
-            recordingStartTime = Date.now();
-            
-            // Start recording indicator
-            isRecording = true;
-            updateUIForRecording(true);
-            
-            // Add a recording interval to show time
-            recordingInterval = setInterval(() => {
-                const elapsedSeconds = Math.floor((Date.now() - recordingStartTime) / 1000);
-                const minutes = Math.floor(elapsedSeconds / 60);
-                const seconds = elapsedSeconds % 60;
-                recordingStatus.textContent = `Recording... ${minutes}:${seconds.toString().padStart(2, '0')}`;
-            }, 1000);
-            
-            console.log('Recording started successfully');
-        } catch (err) {
-            console.error('Start recording error:', err);
-            isRecording = false;
-            updateUIForRecording(false);
-            showErrorMessage('Could not start recording: ' + err.message);
-        }
-    }
-    
-    // Stop recording
-    async function stopRecording() {
-        if (!isRecording) return;
-        
-        isRecording = false;
-        updateUIForRecording(false);
-        processingStatus.classList.remove('hidden');
-        
-        // Clear the recording interval
-        if (recordingInterval) {
-            clearInterval(recordingInterval);
-            recordingInterval = null;
-        }
-        
-        try {
-            // Use the global plugin reference
-            const voiceRecorderPlugin = window.voiceRecorderPluginRef;
-            
-            if (!voiceRecorderPlugin) {
-                throw new Error('Voice Recorder plugin not available');
-            }
-            
-            console.log('Stopping voice recording...');
-            const recordResult = await voiceRecorderPlugin.stopRecording();
-            console.log('Voice recording stopped');
-            
-            // Process the recording result
-            await processAudioForTranscription(recordResult);
-        } catch (err) {
-            console.error('Stop recording error:', err);
-            processingStatus.classList.add('hidden');
-            showErrorMessage('Error stopping recording: ' + err.message);
-        }
-    }
-    
-    // UI toggle for recording state
-    function updateUIForRecording(on) {
-        if (on) {
-            recordButton.classList.add('recording');
-            recordButtonText.textContent = 'Stop Recording';
-            recordButtonIcon.classList.replace('fa-microphone', 'fa-stop');
-            recordingStatus.classList.remove('hidden');
-        } else {
-            recordButton.classList.remove('recording');
-            recordButtonText.textContent = 'Start Recording';
-            recordButtonIcon.classList.replace('fa-stop', 'fa-microphone');
-            recordingStatus.classList.add('hidden');
-        }
-    }
-    
-    // Show error message in UI
-    function showErrorMessage(message) {
-        errorMessage.textContent = message;
-        errorMessage.classList.remove('hidden');
-        
-        // Auto-hide after 5 seconds
-        setTimeout(() => {
-            hideErrorMessage();
-        }, 5000);
-    }
-    
-    // Hide error message
-    function hideErrorMessage() {
-        errorMessage.classList.add('hidden');
-        errorMessage.textContent = '';
-    }
-    
-    // Send transcription to backend for summarization
-    async function sendTranscriptionForSummary(text) {
-        recordButton.disabled = true;
-        processingStatus.classList.remove('hidden');
-        
-        console.log(`Sending text to API: ${text.substring(0, 50)}... (length: ${text.length})`);
-        console.log(`API URL: ${SUMMARY_API_URL}`);
-        
-        try {
-            // Check if we have valid text to send
-            if (!text || text.trim().length === 0) {
-                throw new Error('Text empty');
-            }
-            
-            const requestData = { text };
-            
-            // Make the API request using Capacitor HTTP plugin
-            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                method: 'POST',
-                url: SUMMARY_API_URL,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                },
-                data: JSON.stringify(requestData),
-                connectTimeout: 30,
-                readTimeout: 30
-            });
-            
-            console.log(`API response status: ${response.status}`);
-            
-            if (response.status !== 200) {
-                throw new Error(`Server error (${response.status}): ${response.data}`);
-            }
-            
-            try {
-                const data = JSON.parse(response.data);
-                console.log('API response data:', data);
-                
-                if (data && data.summary) {
-                    summaryResult.textContent = data.summary;
-                } else {
-                    summaryResult.textContent = 'No summary returned from API';
-                    console.error('No summary in API response', data);
-                }
-            } catch (e) {
-                console.error('Error parsing API response as JSON:', e);
-                throw new Error('Invalid response from server (not JSON)');
-            }
-        } catch (err) {
-            console.error('API call error:', err);
-            summaryResult.innerHTML = `<div class="error">Error: ${err.message}</div>`;
-            showErrorMessage(`Summary API error: ${err.message}`);
-        } finally {
-            processingStatus.classList.add('hidden');
-            recordButton.disabled = false;
-        }
-    }
-    
-    // --- TEMPORARY DEBUGGING - ADD THIS FUNCTION AND LISTENER ---
-    async function runGoogleApiConnectionTest() {
-        console.log("DEBUG: testGoogleAPI - Running API connection test...");
-        processingStatus.textContent = "Running API test...";
-        processingStatus.classList.remove('hidden');
-        hideErrorMessage(); // Clear previous errors
-
-        if (!window.GOOGLE_API_KEY || window.GOOGLE_API_KEY.length < 20) {
-             const msg = 'DEBUG: testGoogleAPI - API Key seems missing or invalid in api-config.js';
-             console.error(msg);
-             alert(msg);
-             processingStatus.classList.add('hidden');
-             return;
-        }
-        
-        try {
-            // Use a simple read operation (like listing voices) which requires the key
-            const testUrl = `https://texttospeech.googleapis.com/v1/voices?key=${window.GOOGLE_API_KEY}`; 
-            console.log("DEBUG: testGoogleAPI - Test URL:", testUrl); 
-            
-            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
-                method: 'GET',
-                url: testUrl,
-                headers: { 'Accept': 'application/json' }, // Added Accept header
-                connectTimeout: 20000, // 20 seconds
-                readTimeout: 20000
-            });
-            
-            console.log('DEBUG: testGoogleAPI - Raw Response:', response);
-            const msg = `API connection test SUCCEEDED! Status: ${response.status}. Check console.`;
-            console.log(msg);
-            // alert(msg); // Alert might be annoying, use UI message
-            showErrorMessage(msg); 
-        } catch (err) {
-            console.error('DEBUG: testGoogleAPI - Test FAILED. Full Error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
-            const errorMsg = err.message || 'Unknown error';
-            let detailedError = `API test FAILED: ${errorMsg}. Check console logs.`;
-            try {
-                // Try to get more specific error details if available
-                 if (err.code) detailedError += ` (Code: ${err.code})`;
-                 if (err.status) detailedError += ` (Status: ${err.status})`;
-            } catch(e) {/*ignore*/}
-
-            alert(detailedError); // Use alert for definite failure notice
-            showErrorMessage(detailedError); 
-        } finally {
-            processingStatus.classList.add('hidden');
-        }
-    }
-    
-    // Find the button and add listener after DOM is loaded
-    const testButton = document.getElementById('testApiButton');
-    if (testButton) {
-        testButton.addEventListener('click', runGoogleApiConnectionTest);
-        console.log("DEBUG: Added listener to Test API button.");
+    // Only bind click event if the button exists
+    if (recordButton) {
+        recordButton.addEventListener('click', toggleRecording);
     } else {
-        console.error("DEBUG: Test API button not found!");
+        console.error("Record button not found! Cannot initialize app.");
+        showErrorMessage("Initialization Error: UI element missing.");
+        return; // Stop if core UI element is missing
     }
-    window.runGoogleApiConnectionTest = runGoogleApiConnectionTest; // Make accessible globally if needed
-    // --- END TEMPORARY DEBUGGING ---
 
-    // Event listener for the WAV test button
-    testWavButton.addEventListener('click', () => {
-        if (lastRecordResult) {
-            console.log("DEBUG: 'Transcribe as WAV' button clicked. Processing last recording.");
-            // Use the new function to process specifically as WAV
-            processRecordingAsWav(lastRecordResult);
+    // Toggle recording
+    async function toggleRecording() {
+        // Prevent action if already processing summary or button disabled
+        // Added check for null recordButton just in case, though guarded above
+        if (!recordButton || recordButton.disabled || recordButton.hasAttribute('data-processing-summary')) {
+             console.log("Processing summary or disabled, ignoring toggle click");
+             return;
+         }
+         // Removed data-processing attribute setting here, handled by async flow
+
+        if (isRecording) {
+            stopRecording(); // This is now synchronous trigger
         } else {
-            showErrorMessage("No recording available to test as WAV. Please record first.");
+            // startRecording handles its own button state on error/permission denial
+            await startRecording(); // This involves async permission check
         }
-    });
+    }
 
-    // Event listener for file input change
-    audioFileInput.addEventListener('change', (event) => {
-        selectedFile = event.target.files[0];
-        if (selectedFile) {
-            fileInfo.textContent = `Selected: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`;
-            processUploadButton.disabled = false; // Enable the process button
-            console.log(`File selected: ${selectedFile.name}, Type: ${selectedFile.type}, Size: ${selectedFile.size}`);
-        } else {
-            fileInfo.textContent = 'No file selected';
-            processUploadButton.disabled = true; // Disable if no file
-            console.log('File selection cancelled or no file chosen.');
-        }
-    });
+    // Start recording - Using Web Speech API
+    async function startRecording() {
+        hideErrorMessage();
+        clearResults(); // Reset UI and state
 
-    // Event listener for processing uploaded file
-    processUploadButton.addEventListener('click', async () => {
-        if (!selectedFile) {
-            showErrorMessage("Please select an audio file first.");
-            return;
+        // Request/check permission first
+        const hasPermission = await checkAndRequestPermissions();
+        if (!hasPermission) {
+            return; // Stop if permission not granted or check failed
         }
 
-        console.log(`Processing uploaded file: ${selectedFile.name}`);
-        showStatus('Processing uploaded file...');
-        processingStatus.classList.remove('hidden');
-        errorMessage.classList.add('hidden'); // Hide previous errors
-        transcriptionResult.textContent = '...'; // Reset UI
-        summaryResult.textContent = '...';
+        // Double-check support just before starting
+         if (!SpeechRecognition) {
+             showErrorMessage('Speech recognition became unavailable after initial check.');
+             if (recordButton) recordButton.disabled = true;
+             return;
+         }
+
+        // Prevent starting if already recording (safety check)
+         if (isRecording || recognition) {
+             console.warn("Already recording or recognition instance exists. Resetting first.");
+             resetRecognitionState(); // Ensure clean state before starting new one
+             // Consider adding a small delay here if needed, but usually reset is fast enough
+             // await new Promise(resolve => setTimeout(resolve, 100));
+         }
 
         try {
-            const reader = new FileReader();
-            reader.onload = async (event) => {
-                const base64AudioDataUrl = event.target.result;
-                console.log(`File read successfully. Data URL length: ${base64AudioDataUrl.length}`);
-                
-                // Extract base64 part (remove data:audio/...;base64,)
-                const base64Audio = base64AudioDataUrl.split(',')[1];
-                if (!base64Audio) {
-                   throw new Error('Could not extract Base64 data from file.');
-                }
-                console.log(`Extracted Base64 length: ${base64Audio.length}`);
+            console.log("Initializing SpeechRecognition...");
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;      // Keep listening through pauses
+            recognition.interimResults = true;  // Get results as they come
+            recognition.lang = 'en-US';         // Set language (make configurable later if needed)
+            // recognition.maxAlternatives = 1; // Optional: only get the top result
 
-                // Simulate the structure expected by processAudioForTranscription
-                const simulatedRecordResult = {
-                    value: {
-                        recordDataBase64: base64Audio
-                        // mimeType is ignored now, as processAudioForTranscription forces audio/wav
-                    }
-                };
+            transcriptText = ''; // Reset transcript for new recording session
 
-                // Use the main processing function (which now handles WAV forcing and padding)
-                await processAudioForTranscription(simulatedRecordResult);
-            };
-            reader.onerror = (event) => {
-                console.error("Error reading file:", event.target.error);
-                throw new Error('Failed to read the selected file.');
-            };
-            reader.readAsDataURL(selectedFile); // Read file as Base64 Data URL
-        } catch (err) {
-            console.error('Error processing uploaded file:', err);
-            showErrorMessage('Error processing file: ' + err.message);
+            // Assign Event Handlers *before* calling start()
+            recognition.onstart = handleRecognitionStart;
+            recognition.onresult = handleRecognitionResult;
+            recognition.onerror = handleRecognitionError;
+            recognition.onend = handleRecognitionEnd;
+
+            console.log("Starting SpeechRecognition...");
+            recognition.start(); // This triggers the browser/OS mic access & UI
+            // Actual recording state update (isRecording=true, UI changes) happens in onstart handler
+            // setStatus('Starting...'); // Optional brief status
+
+        } catch (error) {
+            console.error('Error initializing/starting SpeechRecognition:', error);
+            const errorMsg = error.message ? `Start recording failed: ${error.message}` : 'Could not start recognition.';
+            showErrorMessage(errorMsg);
+            resetRecognitionState(); // Ensure clean state on failure
+        }
+    }
+
+    // Stop recording - Using Web Speech API
+    function stopRecording() {
+        if (!recognition || !isRecording) {
+             console.warn("Stop recording called but not recording or recognition not initialized.");
+             // If UI somehow got out of sync, force reset
+             if (!isRecording && recordButton && !recordButton.disabled) {
+                 console.log("Forcing UI reset due to inconsistent state.");
+                 resetRecognitionState();
+             }
+             return; // Only stop if actively recording
+         }
+
+        console.log("Stopping SpeechRecognition intentionally...");
+        setStatus("Processing final speech..."); // Give user feedback
+        try {
+            // Intentionally set isRecording false *before* calling stop
+            // This helps handleRecognitionEnd differentiate intentional vs unintentional stops
+            isRecording = false;
+            recognition.stop(); // Request stop, actual stop processing happens in 'onend'
+        } catch (error) {
+             // This catch might not be very useful as errors often fire async via onerror
+             console.error('Error during sync call to recognition.stop():', error);
+             showErrorMessage("Error trying to stop recording.");
+             resetRecognitionState(); // Force reset
+        } finally {
+             // Update UI immediately to reflect the button press
+             updateUIForRecording(false);
+        }
+    }
+
+    // --- Recognition Event Handlers --- Needed for Web Speech API
+
+    function handleRecognitionStart() {
+        console.log('Speech recognition actually started.');
+        isRecording = true; // Set state now that it has confirmed start
+        updateUIForRecording(true);
+        setStatus('Recording... Speak now!'); // More informative status
+        hideErrorMessage(); // Hide any previous errors like permission prompts
+    }
+
+    function handleRecognitionResult(event) {
+        // Check if recognition object still exists (might be cleaned up by error/end)
+         if (!recognition) {
+             console.warn("onresult fired after recognition object was cleared.");
+             return;
+         }
+
+        let interimTranscript = '';
+        // transcriptText is the persistent variable holding the final transcript
+        let newFinalText = ''; // Collect only final parts from this event
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const transcriptPart = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+                // Append final results recognized in *this* event batch
+                newFinalText += transcriptPart.trim() + ' ';
+            } else {
+                // Latest interim result for display
+                interimTranscript = transcriptPart;
+            }
+        }
+
+        // Append the newly finalized text to the main transcript state
+        if (newFinalText) {
+            transcriptText += newFinalText;
+        }
+
+        // Update the display with current final + latest interim
+        if (transcriptionResult) {
+            const finalDisplay = transcriptText ? transcriptText : ''; // Use the accumulated final text
+            // Display interim results slightly differently
+            const interimDisplay = interimTranscript ? `<i class="interim-text">${interimTranscript}</i>` : '';
+            transcriptionResult.innerHTML = `<div>${finalDisplay}${interimDisplay}</div>`;
+            // Auto-scroll to bottom
+            transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+        }
+    }
+
+    function handleRecognitionError(event) {
+        console.error('Speech recognition error event:', event.error, event.message);
+        // Avoid resetting if it's just 'no-speech' which might recover in continuous mode
+        // Although, often 'no-speech' followed by 'onend' indicates a stop.
+        if (event.error === 'no-speech') {
+            console.warn('No speech detected, recognition might stop.');
+            // setStatus('No speech detected recently...'); // Optional feedback
+            // Don't necessarily reset immediately, wait for onend perhaps
+            return; // Let potential recovery happen or onend handle it
+        }
+
+        let message = `An error occurred: ${event.error}`;
+        switch (event.error) {
+            case 'audio-capture':
+                message = 'Audio capture failed. Ensure microphone is enabled and working.';
+                break;
+            case 'network':
+                message = 'Network error during recognition. Check connection and try again.';
+                break;
+            case 'not-allowed':
+            case 'service-not-allowed':
+                message = 'Microphone access denied. Please enable it in app/browser settings.';
+                // No point in retrying without permission change
+                if (recordButton) recordButton.disabled = true;
+                break;
+            // Add other specific cases as needed
+            default:
+                 message = `Recognition error: ${event.error}. ${event.message || 'Please try again.'}`;
+        }
+
+        showErrorMessage(message);
+        // Force reset the state on significant errors
+        resetRecognitionState();
+    }
+
+    function handleRecognitionEnd() {
+        console.log('Speech recognition service ended (onend fired).');
+
+        // Check the isRecording flag. If it's still true here, it means
+        // the service stopped unexpectedly (e.g., network issue, long silence timeout
+        // even in continuous mode, backgrounded app). If false, stopRecording() was called.
+        const wasIntentionalStop = !isRecording;
+
+        // Always ensure UI reflects stopped state now
+        isRecording = false; // Ensure state is false
+        updateUIForRecording(false);
+
+        if (wasIntentionalStop) {
+            console.log("Intentional stop detected in onend. Processing transcript.");
+            const finalTranscript = transcriptText.trim();
+            console.log("Final Transcript on intentional stop:", finalTranscript);
+
+            // Check if we have a transcript to summarize
+            if (finalTranscript.length > 0) {
+                setStatus('Transcription complete. Summarizing...');
+                if (recordButton) {
+                     recordButton.setAttribute('data-processing-summary', 'true');
+                     recordButton.disabled = true;
+                 }
+                // Send the final, trimmed transcript
+                sendTranscriptionForSummary(finalTranscript);
+            } else {
+                console.log("No transcript generated or empty after intentional stop.");
+                setStatus('Ready'); // Ready for next recording
+                 if (recordButton) recordButton.disabled = false;
+                 if (transcriptionResult) {
+                     transcriptionResult.innerHTML = "<i>Recording stopped. No speech was transcribed.</i>";
+                 }
+            }
+        } else {
+            // Recognition stopped unexpectedly
+            console.warn("Recognition ended unexpectedly (isRecording was true in onend).");
+            // Avoid showing generic error if a specific one was already shown by onerror
+            if (!errorMessage.classList.contains('hidden')) {
+                 // An error message is already visible, likely from onerror
+                 console.log("Assuming onerror handled the message for unexpected stop.");
+            } else if (transcriptText.trim().length > 0) {
+                 // It stopped unexpectedly, but we HAVE a transcript. Maybe summarize?
+                 // Decide policy: Summarize what we got, or discard?
+                 console.log("Stopped unexpectedly, but transcript exists. Proceeding to summarize.");
+                 showErrorMessage("Recording stopped unexpectedly, attempting summary."); // Inform user
+                 const finalTranscript = transcriptText.trim();
+                 setStatus('Transcription incomplete. Summarizing...');
+                  if (recordButton) {
+                     recordButton.setAttribute('data-processing-summary', 'true');
+                     recordButton.disabled = true;
+                 }
+                 sendTranscriptionForSummary(finalTranscript);
+            } else {
+                 // Stopped unexpectedly with no transcript
+                 showErrorMessage("Recording stopped unexpectedly. Please try again.");
+                 setStatus('Ready');
+                 if (recordButton) recordButton.disabled = false;
+            }
+        }
+
+         // Clean up the recognition object *after* all processing in onend
+         recognition = null;
+         console.log("Recognition object nulled.");
+    }
+
+    // --- Utility and API Call Functions ---
+
+    // Reset state, ensure recognition is stopped and nulled
+    function resetRecognitionState() {
+         console.log("Resetting recognition state...");
+         if (recognition) {
+             // Remove handlers to prevent further events after reset
+             recognition.onstart = null;
+             recognition.onresult = null;
+             recognition.onerror = null;
+             recognition.onend = null;
+             if (isRecording) {
+                 try {
+                     console.log("Attempting to stop lingering recognition...");
+                     recognition.stop();
+                 } catch(e) {
+                     console.warn("Error stopping recognition during reset:", e.message);
+                 }
+             }
+             recognition = null;
+             console.log("Recognition object nulled during reset.");
+         }
+         isRecording = false;
+         updateUIForRecording(false);
+         setStatus(''); // Clear status text
+         if (recordButton) {
+             recordButton.disabled = false;
+             recordButton.removeAttribute('data-processing-summary');
+         }
+    }
+
+     // Clear Results - Updated for Web Speech API
+    function clearResults() {
+        transcriptText = '';
+        if (transcriptionResult) transcriptionResult.textContent = '';
+        if (summaryResult) summaryResult.textContent = 'Your summary will appear here';
+        // No audioInfo
+        removeRetrySummaryButton();
+        setStatus('Ready'); // Set initial ready status
+        hideErrorMessage();
+        // Call reset which handles button state and recognition object
+        resetRecognitionState();
+    }
+
+    // UI toggle for recording state - No changes needed
+    function updateUIForRecording(on) { /* ... existing correct code ... */ }
+
+     // Set Status Message - Controls spinner visibility too
+    function setStatus(message) {
+        if (!statusText || !processingStatus) return;
+        statusText.textContent = message;
+        // Show spinner for processing states, hide for Ready or errors shown elsewhere
+        if (message && message.toLowerCase().includes('processing') || message.toLowerCase().includes('summarizing') || message.toLowerCase().includes('starting')) {
+            processingStatus.classList.remove('hidden');
+        } else {
             processingStatus.classList.add('hidden');
         }
-    });
-}); 
+        console.log("Status:", message);
+    }
+
+    // Show error message in UI - No changes needed
+    function showErrorMessage(message) { /* ... existing correct code ... */ }
+
+    // Hide error message - No changes needed
+    function hideErrorMessage() { /* ... existing correct code ... */ }
+
+    // Send Transcription for Summary (Function remains mostly the same)
+    async function sendTranscriptionForSummary(text) {
+        // Status should be 'Summarizing...' set by caller
+        // Button should be disabled and marked by caller
+        console.log("sendTranscriptionForSummary called.");
+        try {
+            console.log(`Sending text (length: ${text.length}) to ${API_BASE_URL}/summarize`);
+            const res = await fetch(`${API_BASE_URL}/summarize`, {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                mode: 'cors',
+                body: JSON.stringify({ text })
+            });
+
+            console.log(`Summarization response status: ${res.status}`);
+            if (!res.ok) {
+                let errorBody = `Server responded with status ${res.status}.`;
+                 try {
+                     const resText = await res.text();
+                     if(resText) errorBody += ` Response: ${resText.substring(0, 100)}${resText.length > 100 ? '...' : ''}`; // Limit length
+                 } catch (e) { /* ignore */ }
+                 console.error('Summarization API error:', errorBody);
+                // Throw specific error for UI
+                throw new Error(`Summarization request failed (${res.status}).`);
+            }
+
+            const result = await res.json();
+            console.log("Summarization response data:", result);
+
+            if (result && typeof result.summary === 'string') {
+                if (result.summary.trim().length === 0) {
+                     displaySummary('[Summary generated was empty]');
+                     setStatus('Summary was empty.');
+                 } else {
+                     displaySummary(result.summary);
+                     setStatus('Summary complete. Ready.');
+                 }
+                 removeRetrySummaryButton();
+            } else {
+                 displaySummary('[Invalid summary received]');
+                 setStatus('Summary generation issue.');
+                 console.warn("Invalid or missing summary in server response:", result);
+                 addRetrySummaryButton(); // Allow retry if response format is bad
+            }
+
+        } catch (err) {
+            console.error('Summarization process error:', err);
+            // Use the specific error thrown above or the generic fetch error
+            showErrorMessage(err.message || 'Summarization failed: An unknown network error occurred.');
+            if (summaryResult) summaryResult.innerHTML = `<div class="error">Could not get summary.</div>`;
+            setStatus('Summarization failed.');
+            addRetrySummaryButton();
+        } finally {
+            // Always runs: re-enable button and remove processing flag *if not recording*
+             if (!isRecording && recordButton) { // Ensure not still recording (shouldn't be)
+                 recordButton.disabled = false;
+                 recordButton.removeAttribute('data-processing-summary');
+             }
+             // Hide spinner only if status is not indicating failure
+             if (statusText.textContent !== 'Summarization failed.') {
+                processingStatus.classList.add('hidden');
+             }
+        }
+    }
+
+    // Add retry button for failed summaries - Updated slightly
+    function addRetrySummaryButton() {
+        if (!summaryControls || document.getElementById('retrySummaryButton')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'retrySummaryButton';
+        btn.className = 'btn retry-btn';
+        btn.innerHTML = '<i class="fas fa-redo"></i><span>Retry Summary</span>';
+        btn.onclick = () => {
+            // Get the current transcript text directly
+            const currentTranscript = transcriptText.trim();
+            if (currentTranscript) {
+                 hideErrorMessage();
+                 if(summaryResult) summaryResult.textContent = 'Retrying summary...';
+                 setStatus('Summarizing text...');
+                 if (recordButton) {
+                     recordButton.disabled = true;
+                      recordButton.setAttribute('data-processing-summary', 'true');
+                 }
+                 // Call summary function again with the existing transcript
+                 sendTranscriptionForSummary(currentTranscript);
+            } else {
+                 showErrorMessage("Cannot retry: No transcription available.");
+            }
+        };
+        summaryControls.appendChild(btn);
+    }
+
+     // Remove Retry Button - No changes needed
+    function removeRetrySummaryButton() { /* ... existing correct code ... */ }
+
+    // Display summary in UI - No changes needed
+    function displaySummary(summary) { /* ... existing correct code ... */ }
+
+    // --- Initial Setup --- Adjusted
+     if (!SpeechRecognition) {
+         console.error("Speech Recognition API not supported. App cannot function.");
+         // Error message already shown during check
+     } else {
+        clearResults(); // Call clearResults on load to set initial state
+        console.log(`App initialized. API URL: ${API_BASE_URL}`);
+        // setStatus('Ready') is called within clearResults now
+
+        // Optional: Check initial permission status non-blockingly on native
+        if (Capacitor.isNativePlatform()) {
+            Permissions.check({ name: 'microphone' }).then(permStatus => {
+                console.log("Initial microphone permission status (native):", permStatus.state);
+                if (permStatus.state !== 'granted') {
+                    console.warn("Microphone permission not yet granted. Will request on first use.");
+                    // Optionally show a non-error hint about needing permissions
+                    // e.g., update a permanent status line: document.getElementById('permHint').textContent = 'Mic permission needed.';
+                }
+            }).catch(e => console.error("Error checking initial native permissions:", e));
+        } else {
+             console.log("Running in browser. Permission will be requested on first use.");
+        }
+     }
+
+}); // End DOMContentLoaded

@@ -299,61 +299,64 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
                 // --- END TEMPORARY DEBUGGING --- 
     
-                // Make the actual API request call using CapacitorHttp
-                console.log("DEBUG: Attempting API call using CapacitorHttp plugin...");
-                const response = await window.Capacitor.Plugins.CapacitorHttp.request({ 
+                // Make the actual API request call - REVERTING TO FETCH INSTEAD OF CapacitorHttp
+                console.log("DEBUG: Attempting API call using native fetch()...");
+                const fetchOptions = {
                     method: 'POST',
-                    ...options, // Spread the defined options (url, headers, data)
-                    connectTimeout: 60 + (retryCount * 30), 
-                    readTimeout: 60 + (retryCount * 30)
-                }); 
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json' 
+                    },
+                    body: options.data // options.data should be JSON.stringify(requestData) 
+                };
+
+                const response = await fetch(finalUrlForSpeechAPI, fetchOptions);
                 
-                console.log(`DEBUG: CapacitorHttp response status: ${response.status}`);
+                console.log(`DEBUG: fetch response status: ${response.status}`);
+
+                if (!response.ok) {
+                    let errorBody = await response.text(); 
+                    try { errorBody = JSON.parse(errorBody); } catch (e) { /* Ignore */ }
+                    console.error('Google Speech API error response (fetch):', errorBody);
+                    throw new Error(`Google Speech API error (fetch): ${response.status} ${response.statusText} - Body: ${JSON.stringify(errorBody)}`);
+                }
+
+                const responseDataJson = await response.json();
                 
                 // Parse the response (Success Case)
-                if (response.status === 200) {
-                    const data = JSON.parse(response.data);
-                    if (data && data.results && data.results.length > 0) {
-                        const transcript = data.results
-                            .map(result => result.alternatives[0].transcript)
-                            .join(' ');
-                        console.log('Received transcription (CapacitorHttp):', transcript.substring(0, 50) + '...');
-                        return transcript; // Return success, exit loop
-                    } else {
-                        console.warn('No transcription results in API response (CapacitorHttp)');
-                        return ''; // Return success (empty), exit loop
-                    }
+                if (responseDataJson && responseDataJson.results && responseDataJson.results.length > 0) {
+                    const transcript = responseDataJson.results
+                        .map(result => result.alternatives[0].transcript)
+                        .join(' ');
+                    console.log('Received transcription (fetch):', transcript.substring(0, 50) + '...');
+                    return transcript; // Return success, exit loop
                 } else {
-                    // Handle non-200 status codes from API
-                    console.error('Google Speech API error response (CapacitorHttp):', response);
-                    throw new Error(`Google Speech API error (CapacitorHttp): ${response.status} - ${JSON.stringify(response.data)}`);
+                    console.warn('No transcription results in API response (fetch)', responseDataJson);
+                    return ''; // Return success (empty), exit loop
                 }
                 
             } catch (err) {
                 // --- TEMPORARY DEBUGGING --- 
-                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED (using CapacitorHttp). Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
+                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED (using fetch). Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
                 // --- END TEMPORARY DEBUGGING --- 
     
-                // Log standard error message
-                console.error(`Attempt ${retryCount + 1} failed (CapacitorHttp):`, err);
+                console.error(`Attempt ${retryCount + 1} failed (fetch):`, err);
                 
-                // Check if it's a timeout and if retries are left
-                if (retryCount < maxRetries && 
-                    (err.message?.includes('timeout') || 
-                     err.message?.includes('timed out') || 
-                     err.code === "SocketTimeoutException")) {
-                    
+                if (err instanceof TypeError && err.message.toLowerCase().includes('failed to fetch')) {
+                     console.error("Fetch failed likely due to CORS, network error, or DNS issue.");
+                     throw new Error("Fetch network error (CORS/DNS/Connection Refused): " + err.message);
+                 } 
+                
+                if (retryCount < maxRetries) {                    
                     retryCount++;
-                    console.log(`Retrying request (${retryCount}/${maxRetries}) (using CapacitorHttp)...`);
-                    await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5s before retry
-                    continue; // Go to the next iteration of the while loop
+                    console.log(`Retrying request (${retryCount}/${maxRetries}) (will use fetch again)...`);
+                    await new Promise(resolve => setTimeout(resolve, 1500)); 
+                    continue; 
                 }
                 
-                // If it's not a retryable error or retries exhausted, handle API key issue or re-throw
                 if (err.message?.includes('API key')) {
                     throw new Error('Invalid or missing API key detected.');
                 }
-                // For any other error, re-throw to be caught by the calling function
                 throw err; 
             }
         } // End while loop

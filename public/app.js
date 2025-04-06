@@ -281,55 +281,78 @@ document.addEventListener('DOMContentLoaded', async () => {
                 console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
                 // --- END TEMPORARY DEBUGGING --- 
     
-                // Make the actual API request call
-                const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                // Make the actual API request call - TRYING WITH FETCH INSTEAD OF CapacitorHttp
+                console.log("DEBUG: Attempting API call using native fetch()...");
+                const fetchOptions = {
                     method: 'POST',
-                    ...options, // Spread the defined options
-                    connectTimeout: 60 + (retryCount * 30), 
-                    readTimeout: 60 + (retryCount * 30)
-                }); 
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // Fetch usually handles Accept automatically, but can be explicit
+                        'Accept': 'application/json' 
+                    },
+                    body: options.data // options.data is already JSON.stringify(requestData)
+                    // Note: fetch does not have explicit connect/read timeouts like the plugin
+                    // It relies on browser/system level timeouts which can be long
+                };
+
+                const response = await fetch(finalUrlForSpeechAPI, fetchOptions);
+                
+                console.log(`DEBUG: fetch response status: ${response.status}`);
+
+                if (!response.ok) {
+                    // Attempt to get error details from response body
+                    let errorBody = await response.text(); // Read body as text first
+                    try {
+                         // Try parsing as JSON if possible
+                         errorBody = JSON.parse(errorBody); 
+                    } catch (e) { /* Ignore if not JSON */ }
+                    console.error('Google Speech API error response (fetch):', errorBody);
+                    throw new Error(`Google Speech API error (fetch): ${response.status} ${response.statusText} - Body: ${JSON.stringify(errorBody)}`);
+                }
+
+                // If response is OK, parse JSON body
+                const responseDataJson = await response.json();
                 
                 // Parse the response (Success Case)
-                if (response.status === 200) {
-                    const data = JSON.parse(response.data);
-                    if (data && data.results && data.results.length > 0) {
-                        const transcript = data.results
-                            .map(result => result.alternatives[0].transcript)
-                            .join(' ');
-                        console.log('Received transcription:', transcript.substring(0, 50) + '...');
-                        return transcript; // Return success, exit loop
-                    } else {
-                        console.warn('No transcription results in API response');
-                        return ''; // Return success (empty), exit loop
-                    }
+                // Check structure for Google Speech API V1
+                if (responseDataJson && responseDataJson.results && responseDataJson.results.length > 0) {
+                    const transcript = responseDataJson.results
+                        .map(result => result.alternatives[0].transcript)
+                        .join(' ');
+                    console.log('Received transcription (fetch):', transcript.substring(0, 50) + '...');
+                    return transcript; // Return success, exit loop
                 } else {
-                    // Handle non-200 status codes from API
-                    console.error('Google Speech API error response:', response);
-                    throw new Error(`Google Speech API error: ${response.status} - ${JSON.stringify(response.data)}`);
+                    console.warn('No transcription results in API response (fetch)', responseDataJson);
+                    return ''; // Return success (empty), exit loop
                 }
+                
             } catch (err) {
                 // --- TEMPORARY DEBUGGING --- 
-                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED. Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
+                console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED (using fetch). Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
                 // --- END TEMPORARY DEBUGGING --- 
     
                 // Log standard error message
-                console.error(`Attempt ${retryCount + 1} failed:`, err);
+                console.error(`Attempt ${retryCount + 1} failed (fetch):`, err);
                 
-                // Check if it's a timeout and if retries are left
-                if (retryCount < maxRetries && 
-                    (err.message?.includes('timeout') || 
-                     err.message?.includes('timed out') || 
-                     err.code === "SocketTimeoutException")) {
-                    
+                // Check if it's a network/CORS error typical with fetch, or potentially a timeout
+                 if (err instanceof TypeError && err.message.toLowerCase().includes('failed to fetch')) {
+                     console.error("Fetch failed likely due to CORS, network error, or DNS issue.");
+                     // Don't retry CORS/network errors from fetch immediately
+                     throw new Error("Fetch network error (CORS/DNS/Connection Refused): " + err.message);
+                 } // Note: fetch doesn't throw specific timeout errors like the plugin, 
+                   // timeouts often manifest as generic 'Failed to fetch' after a long delay.
+                
+                // If retries are left (though fetch doesn't give timeout codes easily)
+                if (retryCount < maxRetries) {                    
                     retryCount++;
-                    console.log(`Retrying request (${retryCount}/${maxRetries})...`);
+                    console.log(`Retrying request (${retryCount}/${maxRetries}) (will use fetch again)...`);
                     await new Promise(resolve => setTimeout(resolve, 1500)); // Wait 1.5s before retry
                     continue; // Go to the next iteration of the while loop
                 }
                 
-                // If it's not a retryable error or retries exhausted, handle API key issue or re-throw
+                // Handle API key specifically if message indicates it (less likely with fetch errors)
                 if (err.message?.includes('API key')) {
-                    throw new Error('Invalid or missing API key. Please check api-config.js file.');
+                    throw new Error('Invalid or missing API key detected.');
                 }
                 // For any other error, re-throw to be caught by the calling function
                 throw err; 

@@ -242,23 +242,36 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             };
             
-            // Make the API request
-            const options = {
-                url: `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`,
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                data: JSON.stringify(requestData)
-            };
+            // --- TEMPORARY DEBUGGING - ADD THESE LINES ---
+            const finalUrlForSpeechAPI = `${GOOGLE_SPEECH_API_URL}?key=${GOOGLE_API_KEY}`;
+            console.log(`DEBUG: sendAudioToGoogleSpeech - Attempting API call (${retryCount + 1}/${maxRetries + 1}) to URL: ${finalUrlForSpeechAPI}`); 
             
-            // Add timeout for request
-            console.log('Sending audio to Google Speech API...');
-            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+            if (!GOOGLE_API_KEY || GOOGLE_API_KEY.length < 20) {
+                console.error("DEBUG: sendAudioToGoogleSpeech - API Key seems MISSING or too short just before call!");
+            }
+            
+            // Prepare the options for logging (ensure 'options' var holding headers/data is defined above)
+            const requestOptionsForLogging = {
                 method: 'POST',
-                ...options,
-                connectTimeout: 30, // 30 seconds timeout
-                readTimeout: 30
-            });
+                url: finalUrlForSpeechAPI, // Log the final computed URL
+                headers: options.headers,  // Log headers from options object
+                // Avoid logging the full base64 audio data in production/real logs
+                // data: options.data, // Potentially very large, skip logging full data for now
+                dataLength: options.data ? options.data.length : 0, // Log the length instead
+                connectTimeout: 60 + (retryCount * 30), 
+                readTimeout: 60 + (retryCount * 30)
+            };
+            // Use JSON.stringify for complex objects
+            console.log("DEBUG: sendAudioToGoogleSpeech - CapacitorHttp request options being sent:", JSON.stringify(requestOptionsForLogging, null, 2)); 
+            // --- END TEMPORARY DEBUGGING ---
+
+            // The original request call follows immediately after these logs:
+            const response = await window.Capacitor.Plugins.CapacitorHttp.request({ // <-- Original line
+                method: 'POST',
+                ...options, // The 'options' object should contain url, headers, data
+                connectTimeout: 60 + (retryCount * 30), 
+                readTimeout: 60 + (retryCount * 30)
+            }); 
             
             // Parse the response
             if (response.status === 200) {
@@ -279,7 +292,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                 throw new Error(`Google Speech API error: ${response.status} - ${response.data}`);
             }
         } catch (err) {
-            console.error('Error sending audio to Google Speech API:', err);
+            // --- TEMPORARY DEBUGGING - ADD THIS LINE ---
+            console.error(`DEBUG: sendAudioToGoogleSpeech - Attempt ${retryCount + 1} FAILED. Full error object:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
+            // --- END TEMPORARY DEBUGGING ---
+
+            // Existing error logging follows:
+            console.error(`Attempt ${retryCount + 1} failed:`, err); 
             // If the error is related to the API key or authentication
             if (err.message && err.message.includes('API key')) {
                 throw new Error('Invalid or missing API key. Please check api-config.js file.');
@@ -501,4 +519,65 @@ document.addEventListener('DOMContentLoaded', async () => {
             recordButton.disabled = false;
         }
     }
+    
+    // --- TEMPORARY DEBUGGING - ADD THIS FUNCTION AND LISTENER ---
+    async function runGoogleApiConnectionTest() {
+        console.log("DEBUG: testGoogleAPI - Running API connection test...");
+        processingStatus.textContent = "Running API test...";
+        processingStatus.classList.remove('hidden');
+        hideErrorMessage(); // Clear previous errors
+
+        if (!window.GOOGLE_API_KEY || window.GOOGLE_API_KEY.length < 20) {
+             const msg = 'DEBUG: testGoogleAPI - API Key seems missing or invalid in api-config.js';
+             console.error(msg);
+             alert(msg);
+             processingStatus.classList.add('hidden');
+             return;
+        }
+        
+        try {
+            // Use a simple read operation (like listing voices) which requires the key
+            const testUrl = `https://texttospeech.googleapis.com/v1/voices?key=${window.GOOGLE_API_KEY}`; 
+            console.log("DEBUG: testGoogleAPI - Test URL:", testUrl); 
+            
+            const response = await window.Capacitor.Plugins.CapacitorHttp.request({
+                method: 'GET',
+                url: testUrl,
+                headers: { 'Accept': 'application/json' }, // Added Accept header
+                connectTimeout: 20000, // 20 seconds
+                readTimeout: 20000
+            });
+            
+            console.log('DEBUG: testGoogleAPI - Raw Response:', response);
+            const msg = `API connection test SUCCEEDED! Status: ${response.status}. Check console.`;
+            console.log(msg);
+            // alert(msg); // Alert might be annoying, use UI message
+            showErrorMessage(msg); 
+        } catch (err) {
+            console.error('DEBUG: testGoogleAPI - Test FAILED. Full Error:', JSON.stringify(err, Object.getOwnPropertyNames(err)));
+            const errorMsg = err.message || 'Unknown error';
+            let detailedError = `API test FAILED: ${errorMsg}. Check console logs.`;
+            try {
+                // Try to get more specific error details if available
+                 if (err.code) detailedError += ` (Code: ${err.code})`;
+                 if (err.status) detailedError += ` (Status: ${err.status})`;
+            } catch(e) {/*ignore*/}
+
+            alert(detailedError); // Use alert for definite failure notice
+            showErrorMessage(detailedError); 
+        } finally {
+            processingStatus.classList.add('hidden');
+        }
+    }
+    
+    // Find the button and add listener after DOM is loaded
+    const testButton = document.getElementById('testApiButton');
+    if (testButton) {
+        testButton.addEventListener('click', runGoogleApiConnectionTest);
+        console.log("DEBUG: Added listener to Test API button.");
+    } else {
+        console.error("DEBUG: Test API button not found!");
+    }
+    window.runGoogleApiConnectionTest = runGoogleApiConnectionTest; // Make accessible globally if needed
+    // --- END TEMPORARY DEBUGGING ---
 }); 

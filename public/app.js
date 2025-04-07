@@ -1,7 +1,6 @@
 import { Capacitor } from '@capacitor/core';
-// Removed VoiceRecorder import
-// Use Capacitor Permissions for a smoother check before browser prompt
-import { Permissions } from '@capacitor/permissions';
+// Use the community speech recognition plugin
+import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
 document.addEventListener('DOMContentLoaded', () => {
     // Capacitor check - Keep this for native-specific logic or info
@@ -23,408 +22,273 @@ document.addEventListener('DOMContentLoaded', () => {
     // Use the provided backend URL directly
     const API_BASE_URL = 'https://trans-and-sum-project.el.r.appspot.com';
 
-    // --- Web Speech API Setup --- Check for support early
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let recognition = null;
-
-    if (!SpeechRecognition) {
-        // Use the existing showErrorMessage function
-        showErrorMessage('Speech recognition not supported by this browser/WebView. Please use Chrome, Edge, or Safari.');
-        if (recordButton) recordButton.disabled = true;
-        // Hide elements that rely on speech recognition if needed
-        // document.getElementById('someContainer').style.display = 'none';
-        return; // Stop initialization
-    }
-    console.log("Web Speech API is supported.");
-
     // App state
-    let isRecording = false;
-    // Removed recordedAudioData
-    let transcriptText = ''; // Store final transcript
+    let isRecording = false; // Track if recognition is actively listening
+    let currentTranscript = ''; // Store transcript built from partial results
+    let partialListener = null; // Handle for the partial results listener
 
-    // --- Permission Check (using Capacitor Permissions for native, browser handles its own) ---
-    const checkAndRequestPermissions = async () => {
-        // Only check via Capacitor on actual native platforms
-        if (!Capacitor.isNativePlatform()) {
-            console.log("Running in browser, skipping Capacitor permission check.");
-            // We assume the browser will prompt when recognition.start() is called.
-            // We return true here to allow proceeding to recognition.start().
-            return true;
-        }
-
-        try {
-            console.log("Checking microphone permission via Capacitor...");
-            // Use the specific permission name 'microphone'
-            let permStatus = await Permissions.check({ name: 'microphone' });
-            console.log("Initial permission status:", permStatus.state);
-
-            // If already granted, we're good.
-            if (permStatus.state === 'granted') {
-                return true;
-            }
-
-            // If it's prompt or prompt-with-rationale, attempt to request.
-            if (permStatus.state === 'prompt' || permStatus.state === 'prompt-with-rationale') {
-                console.log("Requesting microphone permission via Capacitor...");
-                permStatus = await Permissions.request({ name: 'microphone' });
-                 console.log("Requested permission status:", permStatus.state);
-                if (permStatus.state === 'granted') {
-                    return true;
-                }
-            }
-
-            // If we reach here, permission is denied.
-            console.warn("Microphone permission denied via Capacitor check.");
-            showErrorMessage('Microphone permission is required. Please grant it in App Settings.');
-            return false;
-
-        } catch (error) {
-            console.error("Capacitor Permission check/request error:", error);
-            // Check if it's an known unimplemented error (e.g., on web)
-            if (error.message && error.message.includes('not implemented')) {
-                console.warn("Capacitor Permissions API not implemented on this platform (likely web), relying on browser prompt.");
-                return true; // Allow proceeding, browser will handle prompt
-            }
-            showErrorMessage('Failed to check/request microphone permissions.');
-            return false;
-        }
-    };
-
-
-    // Only bind click event if the button exists
+    // --- Event Listener ---
     if (recordButton) {
         recordButton.addEventListener('click', toggleRecording);
     } else {
         console.error("Record button not found! Cannot initialize app.");
-        showErrorMessage("Initialization Error: UI element missing.");
+        showErrorMessage("Initialization Error: Record button not found.");
         return; // Stop if core UI element is missing
     }
 
-    // Toggle recording
+    // --- Toggle Recording ---
     async function toggleRecording() {
-        // Prevent action if already processing summary or button disabled
-        // Added check for null recordButton just in case, though guarded above
         if (!recordButton || recordButton.disabled || recordButton.hasAttribute('data-processing-summary')) {
-             console.log("Processing summary or disabled, ignoring toggle click");
-             return;
-         }
-         // Removed data-processing attribute setting here, handled by async flow
+            return; // Prevent action if summarizing or disabled
+        }
 
         if (isRecording) {
-            stopRecording(); // This is now synchronous trigger
+            await stopRecognition(); // Request manual stop
         } else {
-            // startRecording handles its own button state on error/permission denial
-            await startRecording(); // This involves async permission check
+            await startRecognition(); // Start the recognition process
         }
     }
 
-    // Start recording - Using Web Speech API
-    async function startRecording() {
+    // --- Start Recognition ---
+    async function startRecognition() {
         hideErrorMessage();
         clearResults(); // Reset UI and state
 
-        // Request/check permission first
-        const hasPermission = await checkAndRequestPermissions();
-        if (!hasPermission) {
-            return; // Stop if permission not granted or check failed
+        // 1. Check/Request Permissions
+        try {
+            // Check for availability first (good practice)
+            const available = await SpeechRecognition.available();
+            if (!available) {
+                showErrorMessage('Native speech recognition is not available on this device.');
+                return;
+            }
+
+            // Request permission - this should prompt if not granted
+            const permissionStatus = await SpeechRecognition.requestPermission();
+            console.log("Permission status:", permissionStatus);
+
+            if (!permissionStatus?.granted) { // Use optional chaining
+                showErrorMessage('Microphone permission is required to record speech.');
+                return;
+            }
+        } catch (error) {
+            console.error("Permission/Availability check failed:", error);
+            showErrorMessage(`Error checking permissions: ${error.message || 'Unknown error'}`);
+            return;
         }
 
-        // Double-check support just before starting
-         if (!SpeechRecognition) {
-             showErrorMessage('Speech recognition became unavailable after initial check.');
-             if (recordButton) recordButton.disabled = true;
-             return;
-         }
-
-        // Prevent starting if already recording (safety check)
-         if (isRecording || recognition) {
-             console.warn("Already recording or recognition instance exists. Resetting first.");
-             resetRecognitionState(); // Ensure clean state before starting new one
-             // Consider adding a small delay here if needed, but usually reset is fast enough
-             // await new Promise(resolve => setTimeout(resolve, 100));
-         }
-
+        // 2. Start Listening
         try {
-            console.log("Initializing SpeechRecognition...");
-            recognition = new SpeechRecognition();
-            recognition.continuous = true;      // Keep listening through pauses
-            recognition.interimResults = true;  // Get results as they come
-            recognition.lang = 'en-US';         // Set language (make configurable later if needed)
-            // recognition.maxAlternatives = 1; // Optional: only get the top result
+            isRecording = true;
+            currentTranscript = ''; // Reset transcript
+            updateUIForRecording(true);
+            setStatus('Listening... Speak now!');
+            if (transcriptionResult) transcriptionResult.innerHTML = '<i>Listening...</i>'; // Initial feedback
 
-            transcriptText = ''; // Reset transcript for new recording session
+            // Add listener for partial results *before* starting
+            // Ensure listener handle is stored so it can be removed
+            partialListener = await SpeechRecognition.addListener('partialResults', (data) => {
+                if (data && data.matches && data.matches.length > 0) {
+                    // Update the display with the latest partial result
+                    const latestPartial = data.matches[0];
+                    if (transcriptionResult) {
+                        transcriptionResult.innerHTML = `<div>${currentTranscript}<i class="interim-text">${latestPartial}</i></div>`;
+                        transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+                    }
+                }
+            });
 
-            // Assign Event Handlers *before* calling start()
-            recognition.onstart = handleRecognitionStart;
-            recognition.onresult = handleRecognitionResult;
-            recognition.onerror = handleRecognitionError;
-            recognition.onend = handleRecognitionEnd;
+            // Start recognition - this returns a promise that resolves with final results
+            // when the OS determines speech has ended (or on manual stop).
+            const result = await SpeechRecognition.start({
+                language: 'en-US',
+                maxResults: 1, // Get only the best match
+                prompt: "Speak now", // Optional prompt for some platforms
+                partialResults: true, // Essential for getting live feedback and using the listener
+                popup: false // Prevent default OS popup if any
+            });
 
-            console.log("Starting SpeechRecognition...");
-            recognition.start(); // This triggers the browser/OS mic access & UI
-            // Actual recording state update (isRecording=true, UI changes) happens in onstart handler
-            // setStatus('Starting...'); // Optional brief status
+            // --- Promise Resolved: Recognition Ended Naturally ---            
+            console.log("Recognition ended naturally, result:", result);
+            isRecording = false; // Update state
+            updateUIForRecording(false); // Update UI
+            if(partialListener) await partialListener.remove(); // Clean up listener
+            partialListener = null;
+
+            if (result && result.matches && result.matches.length > 0) {
+                const finalTranscript = result.matches[0].trim();
+                currentTranscript = finalTranscript; // Store final version
+                if (transcriptionResult) transcriptionResult.textContent = finalTranscript;
+
+                if (finalTranscript.length > 0) {
+                    setStatus('Transcription complete. Summarizing...');
+                    if (recordButton) {
+                        recordButton.setAttribute('data-processing-summary', 'true');
+                        recordButton.disabled = true;
+                    }
+                    sendTranscriptionForSummary(finalTranscript);
+                } else {
+                    setStatus('Ready');
+                    if (transcriptionResult) transcriptionResult.innerHTML = '<i>No speech detected.</i>';
+                    if (recordButton) recordButton.disabled = false;
+                }
+            } else {
+                // Handle case where recognition ended but no matches were returned
+                setStatus('Ready');
+                showErrorMessage('Could not transcribe speech. Please try again.');
+                 if (transcriptionResult) transcriptionResult.innerHTML = '<i>No speech detected.</i>';
+                 if (recordButton) recordButton.disabled = false;
+            }
 
         } catch (error) {
-            console.error('Error initializing/starting SpeechRecognition:', error);
-            const errorMsg = error.message ? `Start recording failed: ${error.message}` : 'Could not start recognition.';
-            showErrorMessage(errorMsg);
-            resetRecognitionState(); // Ensure clean state on failure
+            // --- Error During Active Recognition ---            
+            console.error('Speech recognition error:', error);
+            isRecording = false; // Ensure state is reset
+            updateUIForRecording(false);
+             if(partialListener) await partialListener.remove(); // Clean up listener on error too
+             partialListener = null;
+
+            // Provide specific feedback based on common errors if possible
+            let message = error.message || 'An unknown error occurred';
+            if (message.toLowerCase().includes('permission')) {
+                message = 'Microphone permission issue. Please check App Settings.';
+                 if (recordButton) recordButton.disabled = true;
+            } else if (message.toLowerCase().includes('timeout')) {
+                message = 'No speech detected for a while. Timed out.';
+            } else if (message.toLowerCase().includes('network')) {
+                 message = 'Network error during recognition. Check connection.';
+             } // Add more specific error checks as needed
+
+            showErrorMessage(`Recognition failed: ${message}`);
+            resetAppStateUI(); // Reset UI/button state
         }
     }
 
-    // Stop recording - Using Web Speech API
-    function stopRecording() {
-        if (!recognition || !isRecording) {
-             console.warn("Stop recording called but not recording or recognition not initialized.");
-             // If UI somehow got out of sync, force reset
-             if (!isRecording && recordButton && !recordButton.disabled) {
-                 console.log("Forcing UI reset due to inconsistent state.");
-                 resetRecognitionState();
-             }
-             return; // Only stop if actively recording
-         }
+    // --- Stop Recognition (Manual) ---
+    async function stopRecognition() {
+        if (!isRecording) {
+            console.warn("Stop called but not recording.");
+            return;
+        }
+        
+        setStatus("Stopping listening...");
+        if (recordButton) recordButton.disabled = true; // Temporarily disable while stopping
 
-        console.log("Stopping SpeechRecognition intentionally...");
-        setStatus("Processing final speech..."); // Give user feedback
         try {
-            // Intentionally set isRecording false *before* calling stop
-            // This helps handleRecognitionEnd differentiate intentional vs unintentional stops
+            // Remove listener *before* stopping to prevent potential race conditions
+             if(partialListener) await partialListener.remove();
+             partialListener = null;
+
+            // Request the plugin to stop listening
+            await SpeechRecognition.stop();
+            console.log("Manual stop requested.");
+            // The promise from start() should now resolve/reject, and that handler will manage the final transcript/state.
+            // Set isRecording = false will happen in the start() promise resolution/rejection handler.
+        } catch (error) {
+            console.error('Error stopping speech recognition:', error);
+            showErrorMessage(`Failed to stop cleanly: ${error.message}`);
+            // Force reset state if stopping fails badly
+            resetAppStateUI();
             isRecording = false;
-            recognition.stop(); // Request stop, actual stop processing happens in 'onend'
-        } catch (error) {
-             // This catch might not be very useful as errors often fire async via onerror
-             console.error('Error during sync call to recognition.stop():', error);
-             showErrorMessage("Error trying to stop recording.");
-             resetRecognitionState(); // Force reset
+            updateUIForRecording(false);
         } finally {
-             // Update UI immediately to reflect the button press
-             updateUIForRecording(false);
-        }
-    }
-
-    // --- Recognition Event Handlers --- Needed for Web Speech API
-
-    function handleRecognitionStart() {
-        console.log('Speech recognition actually started.');
-        isRecording = true; // Set state now that it has confirmed start
-        updateUIForRecording(true);
-        setStatus('Recording... Speak now!'); // More informative status
-        hideErrorMessage(); // Hide any previous errors like permission prompts
-    }
-
-    function handleRecognitionResult(event) {
-        // Check if recognition object still exists (might be cleaned up by error/end)
-         if (!recognition) {
-             console.warn("onresult fired after recognition object was cleared.");
-             return;
-         }
-
-        let interimTranscript = '';
-        // transcriptText is the persistent variable holding the final transcript
-        let newFinalText = ''; // Collect only final parts from this event
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-            const transcriptPart = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-                // Append final results recognized in *this* event batch
-                newFinalText += transcriptPart.trim() + ' ';
-            } else {
-                // Latest interim result for display
-                interimTranscript = transcriptPart;
+            // Re-enable button if not already handled by the start() promise resolution/rejection
+            if (!recordButton.hasAttribute('data-processing-summary')) {
+                 recordButton.disabled = false;
             }
         }
-
-        // Append the newly finalized text to the main transcript state
-        if (newFinalText) {
-            transcriptText += newFinalText;
-        }
-
-        // Update the display with current final + latest interim
-        if (transcriptionResult) {
-            const finalDisplay = transcriptText ? transcriptText : ''; // Use the accumulated final text
-            // Display interim results slightly differently
-            const interimDisplay = interimTranscript ? `<i class="interim-text">${interimTranscript}</i>` : '';
-            transcriptionResult.innerHTML = `<div>${finalDisplay}${interimDisplay}</div>`;
-            // Auto-scroll to bottom
-            transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
-        }
     }
 
-    function handleRecognitionError(event) {
-        console.error('Speech recognition error event:', event.error, event.message);
-        // Avoid resetting if it's just 'no-speech' which might recover in continuous mode
-        // Although, often 'no-speech' followed by 'onend' indicates a stop.
-        if (event.error === 'no-speech') {
-            console.warn('No speech detected, recognition might stop.');
-            // setStatus('No speech detected recently...'); // Optional feedback
-            // Don't necessarily reset immediately, wait for onend perhaps
-            return; // Let potential recovery happen or onend handle it
-        }
+    // --- Utility Functions ---
 
-        let message = `An error occurred: ${event.error}`;
-        switch (event.error) {
-            case 'audio-capture':
-                message = 'Audio capture failed. Ensure microphone is enabled and working.';
-                break;
-            case 'network':
-                message = 'Network error during recognition. Check connection and try again.';
-                break;
-            case 'not-allowed':
-            case 'service-not-allowed':
-                message = 'Microphone access denied. Please enable it in app/browser settings.';
-                // No point in retrying without permission change
-                if (recordButton) recordButton.disabled = true;
-                break;
-            // Add other specific cases as needed
-            default:
-                 message = `Recognition error: ${event.error}. ${event.message || 'Please try again.'}`;
-        }
-
-        showErrorMessage(message);
-        // Force reset the state on significant errors
-        resetRecognitionState();
-    }
-
-    function handleRecognitionEnd() {
-        console.log('Speech recognition service ended (onend fired).');
-
-        // Check the isRecording flag. If it's still true here, it means
-        // the service stopped unexpectedly (e.g., network issue, long silence timeout
-        // even in continuous mode, backgrounded app). If false, stopRecording() was called.
-        const wasIntentionalStop = !isRecording;
-
-        // Always ensure UI reflects stopped state now
-        isRecording = false; // Ensure state is false
-        updateUIForRecording(false);
-
-        if (wasIntentionalStop) {
-            console.log("Intentional stop detected in onend. Processing transcript.");
-            const finalTranscript = transcriptText.trim();
-            console.log("Final Transcript on intentional stop:", finalTranscript);
-
-            // Check if we have a transcript to summarize
-            if (finalTranscript.length > 0) {
-                setStatus('Transcription complete. Summarizing...');
-                if (recordButton) {
-                     recordButton.setAttribute('data-processing-summary', 'true');
-                     recordButton.disabled = true;
-                 }
-                // Send the final, trimmed transcript
-                sendTranscriptionForSummary(finalTranscript);
-            } else {
-                console.log("No transcript generated or empty after intentional stop.");
-                setStatus('Ready'); // Ready for next recording
-                 if (recordButton) recordButton.disabled = false;
-                 if (transcriptionResult) {
-                     transcriptionResult.innerHTML = "<i>Recording stopped. No speech was transcribed.</i>";
-                 }
-            }
-        } else {
-            // Recognition stopped unexpectedly
-            console.warn("Recognition ended unexpectedly (isRecording was true in onend).");
-            // Avoid showing generic error if a specific one was already shown by onerror
-            if (!errorMessage.classList.contains('hidden')) {
-                 // An error message is already visible, likely from onerror
-                 console.log("Assuming onerror handled the message for unexpected stop.");
-            } else if (transcriptText.trim().length > 0) {
-                 // It stopped unexpectedly, but we HAVE a transcript. Maybe summarize?
-                 // Decide policy: Summarize what we got, or discard?
-                 console.log("Stopped unexpectedly, but transcript exists. Proceeding to summarize.");
-                 showErrorMessage("Recording stopped unexpectedly, attempting summary."); // Inform user
-                 const finalTranscript = transcriptText.trim();
-                 setStatus('Transcription incomplete. Summarizing...');
-                  if (recordButton) {
-                     recordButton.setAttribute('data-processing-summary', 'true');
-                     recordButton.disabled = true;
-                 }
-                 sendTranscriptionForSummary(finalTranscript);
-            } else {
-                 // Stopped unexpectedly with no transcript
-                 showErrorMessage("Recording stopped unexpectedly. Please try again.");
-                 setStatus('Ready');
-                 if (recordButton) recordButton.disabled = false;
-            }
-        }
-
-         // Clean up the recognition object *after* all processing in onend
-         recognition = null;
-         console.log("Recognition object nulled.");
-    }
-
-    // --- Utility and API Call Functions ---
-
-    // Reset state, ensure recognition is stopped and nulled
-    function resetRecognitionState() {
-         console.log("Resetting recognition state...");
-         if (recognition) {
-             // Remove handlers to prevent further events after reset
-             recognition.onstart = null;
-             recognition.onresult = null;
-             recognition.onerror = null;
-             recognition.onend = null;
-             if (isRecording) {
-                 try {
-                     console.log("Attempting to stop lingering recognition...");
-                     recognition.stop();
-                 } catch(e) {
-                     console.warn("Error stopping recognition during reset:", e.message);
-                 }
-             }
-             recognition = null;
-             console.log("Recognition object nulled during reset.");
-         }
-         isRecording = false;
-         updateUIForRecording(false);
-         setStatus(''); // Clear status text
+    // Reset UI elements and button state, but not transcript variables
+    function resetAppStateUI() {
          if (recordButton) {
              recordButton.disabled = false;
              recordButton.removeAttribute('data-processing-summary');
          }
+         setStatus('Ready');
+         hideErrorMessage();
+         updateUIForRecording(false); // Ensure button shows "Start"
+          // Don't clear text results here, only on full clearResults()
     }
 
-     // Clear Results - Updated for Web Speech API
+    // Clear everything including transcripts and summary
     function clearResults() {
-        transcriptText = '';
+        currentTranscript = ''; // Reset transcript state
+        transcriptText = ''; // Reset old variable just in case
         if (transcriptionResult) transcriptionResult.textContent = '';
         if (summaryResult) summaryResult.textContent = 'Your summary will appear here';
-        // No audioInfo
         removeRetrySummaryButton();
-        setStatus('Ready'); // Set initial ready status
-        hideErrorMessage();
-        // Call reset which handles button state and recognition object
-        resetRecognitionState();
+        resetAppStateUI(); // Reset buttons and status
+        // No need to call resetRecognitionState as plugin state is managed differently
     }
 
-    // UI toggle for recording state - No changes needed
-    function updateUIForRecording(on) { /* ... existing correct code ... */ }
+    // UI toggle for recording state
+    function updateUIForRecording(on) {
+        if (!recordButton || !recordButtonText || !recordButtonIcon) return;
+        if (on) {
+            recordButton.classList.add('recording');
+            recordButtonText.textContent = 'Stop Listening'; // Changed text
+            recordButtonIcon.classList.replace('fa-microphone', 'fa-stop');
+            if (recordingStatus) recordingStatus.classList.add('hidden'); // Hide old status element
+        } else {
+            recordButton.classList.remove('recording');
+            recordButtonText.textContent = 'Start Recording';
+            recordButtonIcon.classList.replace('fa-stop', 'fa-microphone');
+            if (recordingStatus) recordingStatus.classList.add('hidden');
+        }
+    }
 
-     // Set Status Message - Controls spinner visibility too
+     // Set Status Message
     function setStatus(message) {
         if (!statusText || !processingStatus) return;
         statusText.textContent = message;
-        // Show spinner for processing states, hide for Ready or errors shown elsewhere
-        if (message && message.toLowerCase().includes('processing') || message.toLowerCase().includes('summarizing') || message.toLowerCase().includes('starting')) {
+        // Show spinner only during summarization
+        if (message && message.toLowerCase().includes('summarizing')) {
             processingStatus.classList.remove('hidden');
         } else {
             processingStatus.classList.add('hidden');
         }
-        console.log("Status:", message);
     }
 
-    // Show error message in UI - No changes needed
-    function showErrorMessage(message) { /* ... existing correct code ... */ }
+    // Show error message in UI
+    function showErrorMessage(message) {
+        if (!errorMessage) return;
+        errorMessage.textContent = message;
+        errorMessage.classList.remove('hidden');
+        console.error("UI Error Displayed:", message); // Keep console error for dev debugging
+        if (errorMessage.timeoutId) {
+            clearTimeout(errorMessage.timeoutId);
+        }
+        errorMessage.timeoutId = setTimeout(hideErrorMessage, 7000); // Longer display time
+    }
 
-    // Hide error message - No changes needed
-    function hideErrorMessage() { /* ... existing correct code ... */ }
+    // Hide error message
+    function hideErrorMessage() {
+         if (!errorMessage) return;
+         if (errorMessage.timeoutId) {
+            clearTimeout(errorMessage.timeoutId);
+            errorMessage.timeoutId = null;
+        }
+        errorMessage.classList.add('hidden');
+        errorMessage.textContent = '';
+    }
 
-    // Send Transcription for Summary (Function remains mostly the same)
+    // Send Transcription for Summary (API call remains the same)
     async function sendTranscriptionForSummary(text) {
-        // Status should be 'Summarizing...' set by caller
-        // Button should be disabled and marked by caller
-        console.log("sendTranscriptionForSummary called.");
+        if (!text || text.trim().length === 0) {
+            console.warn("Attempted to summarize empty text.");
+            setStatus('Ready'); // Reset status if transcription was empty
+             if (recordButton) recordButton.disabled = false;
+            return;
+        }
+
+        // Status set to 'Summarizing...' by caller
+        // Button disabled and marked by caller
+
         try {
-            console.log(`Sending text (length: ${text.length}) to ${API_BASE_URL}/summarize`);
+            // console.log(`Sending text (length: ${text.length}) to ${API_BASE_URL}/summarize`);
             const res = await fetch(`${API_BASE_URL}/summarize`, {
                 method:'POST',
                 headers:{'Content-Type':'application/json'},
@@ -432,20 +296,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ text })
             });
 
-            console.log(`Summarization response status: ${res.status}`);
             if (!res.ok) {
                 let errorBody = `Server responded with status ${res.status}.`;
                  try {
                      const resText = await res.text();
-                     if(resText) errorBody += ` Response: ${resText.substring(0, 100)}${resText.length > 100 ? '...' : ''}`; // Limit length
+                     if(resText) errorBody += ` Response: ${resText.substring(0, 100)}${resText.length > 100 ? '...' : ''}`;
                  } catch (e) { /* ignore */ }
                  console.error('Summarization API error:', errorBody);
-                // Throw specific error for UI
                 throw new Error(`Summarization request failed (${res.status}).`);
             }
 
             const result = await res.json();
-            console.log("Summarization response data:", result);
 
             if (result && typeof result.summary === 'string') {
                 if (result.summary.trim().length === 0) {
@@ -459,20 +320,19 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                  displaySummary('[Invalid summary received]');
                  setStatus('Summary generation issue.');
-                 console.warn("Invalid or missing summary in server response:", result);
-                 addRetrySummaryButton(); // Allow retry if response format is bad
+                 console.warn("Invalid summary response:", result);
+                 addRetrySummaryButton();
             }
 
         } catch (err) {
             console.error('Summarization process error:', err);
-            // Use the specific error thrown above or the generic fetch error
-            showErrorMessage(err.message || 'Summarization failed: An unknown network error occurred.');
+            showErrorMessage(err.message || 'Summarization failed: Unknown network error.');
             if (summaryResult) summaryResult.innerHTML = `<div class="error">Could not get summary.</div>`;
             setStatus('Summarization failed.');
             addRetrySummaryButton();
         } finally {
-            // Always runs: re-enable button and remove processing flag *if not recording*
-             if (!isRecording && recordButton) { // Ensure not still recording (shouldn't be)
+            // Always runs: re-enable button
+            if (recordButton) {
                  recordButton.disabled = false;
                  recordButton.removeAttribute('data-processing-summary');
              }
@@ -483,18 +343,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Add retry button for failed summaries - Updated slightly
+    // Add retry button for failed summaries
     function addRetrySummaryButton() {
         if (!summaryControls || document.getElementById('retrySummaryButton')) return;
-
         const btn = document.createElement('button');
         btn.id = 'retrySummaryButton';
         btn.className = 'btn retry-btn';
         btn.innerHTML = '<i class="fas fa-redo"></i><span>Retry Summary</span>';
         btn.onclick = () => {
-            // Get the current transcript text directly
-            const currentTranscript = transcriptText.trim();
-            if (currentTranscript) {
+            // Use the last successfully completed transcript (now stored in currentTranscript)
+            const transcriptToRetry = currentTranscript.trim();
+            if (transcriptToRetry) {
                  hideErrorMessage();
                  if(summaryResult) summaryResult.textContent = 'Retrying summary...';
                  setStatus('Summarizing text...');
@@ -502,8 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      recordButton.disabled = true;
                       recordButton.setAttribute('data-processing-summary', 'true');
                  }
-                 // Call summary function again with the existing transcript
-                 sendTranscriptionForSummary(currentTranscript);
+                 sendTranscriptionForSummary(transcriptToRetry);
             } else {
                  showErrorMessage("Cannot retry: No transcription available.");
             }
@@ -511,34 +369,40 @@ document.addEventListener('DOMContentLoaded', () => {
         summaryControls.appendChild(btn);
     }
 
-     // Remove Retry Button - No changes needed
-    function removeRetrySummaryButton() { /* ... existing correct code ... */ }
+    // Remove Retry Button
+    function removeRetrySummaryButton() {
+        const btn = document.getElementById('retrySummaryButton');
+        if (btn) btn.remove();
+    }
 
-    // Display summary in UI - No changes needed
-    function displaySummary(summary) { /* ... existing correct code ... */ }
+    // Display summary in UI
+    function displaySummary(summary) {
+        if (!summaryResult) return;
+        summaryResult.innerHTML = summary
+            ? summary.split('\n').map(l => `<p>${l.trim()}</p>`).join('')
+            : '<p>[No summary content received]</p>';
+        removeRetrySummaryButton();
+    }
 
-    // --- Initial Setup --- Adjusted
-     if (!SpeechRecognition) {
-         console.error("Speech Recognition API not supported. App cannot function.");
-         // Error message already shown during check
-     } else {
-        clearResults(); // Call clearResults on load to set initial state
-        console.log(`App initialized. API URL: ${API_BASE_URL}`);
-        // setStatus('Ready') is called within clearResults now
-
-        // Optional: Check initial permission status non-blockingly on native
-        if (Capacitor.isNativePlatform()) {
-            Permissions.check({ name: 'microphone' }).then(permStatus => {
-                console.log("Initial microphone permission status (native):", permStatus.state);
-                if (permStatus.state !== 'granted') {
-                    console.warn("Microphone permission not yet granted. Will request on first use.");
-                    // Optionally show a non-error hint about needing permissions
-                    // e.g., update a permanent status line: document.getElementById('permHint').textContent = 'Mic permission needed.';
-                }
-            }).catch(e => console.error("Error checking initial native permissions:", e));
-        } else {
-             console.log("Running in browser. Permission will be requested on first use.");
-        }
-     }
+    // --- Initial Setup ---
+     clearResults(); // Set initial state
+     console.log("Speech Recognition App Initialized (using community plugin).");
+     // Optional: Check initial plugin availability/permissions non-blockingly
+     SpeechRecognition.available().then(available => {
+         if (!available) {
+             showErrorMessage("Speech recognition unavailable on this device.");
+             if (recordButton) recordButton.disabled = true;
+         } else {
+             // Use checkPermissions() (plural) for v5.x
+             SpeechRecognition.checkPermissions().then(permissionStatus => {
+                 // Check the permission state within the returned object (likely 'granted', 'denied', or 'prompt')
+                 console.log("Initial Mic Permission Status:", permissionStatus?.permission); // Log the actual status
+                 if (permissionStatus?.permission !== 'granted') { // Adjust check based on the object structure
+                      console.warn("Microphone permission not granted initially.");
+                      // Optionally show a non-error hint here
+                 }
+             }).catch(e => console.error("Error checking initial permission:", e));
+         }
+     }).catch(e => console.error("Error checking plugin availability:", e));
 
 }); // End DOMContentLoaded

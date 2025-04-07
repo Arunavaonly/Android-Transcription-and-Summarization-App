@@ -52,118 +52,112 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Start Recognition ---
     async function startRecognition() {
         hideErrorMessage();
-        clearResults(); // Reset UI and state
-
-        // 1. Check/Request Permissions
+        clearResults();               // reset transcript & UI
+      
+        // 1) Make sure native recognizer is there
+        let available = false;
         try {
-            // Check for availability first (good practice)
-            const available = await SpeechRecognition.available();
-            if (!available) {
-                showErrorMessage('Native speech recognition is not available on this device.');
-                return;
-            }
-
-            // Request permission - this should prompt if not granted
-            const permissionStatus = await SpeechRecognition.requestPermission();
-            console.log("Permission status:", permissionStatus);
-
-            if (!permissionStatus?.granted) { // Use optional chaining
-                showErrorMessage('Microphone permission is required to record speech.');
-                return;
-            }
-        } catch (error) {
-            console.error("Permission/Availability check failed:", error);
-            showErrorMessage(`Error checking permissions: ${error.message || 'Unknown error'}`);
-            return;
+          available = await SpeechRecognition.available();
+        } catch (e) {
+          console.error('Error checking availability:', e);
         }
-
-        // 2. Start Listening
+        if (!available) {
+          showErrorMessage('Speech recognition not available on this device.');
+          return;
+        }
+      
+        // 2) Ask for mic permission
+        let perm;
         try {
-            isRecording = true;
-            currentTranscript = ''; // Reset transcript
-            updateUIForRecording(true);
-            setStatus('Listening... Speak now!');
-            if (transcriptionResult) transcriptionResult.innerHTML = '<i>Listening...</i>'; // Initial feedback
-
-            // Add listener for partial results *before* starting
-            // Ensure listener handle is stored so it can be removed
-            partialListener = await SpeechRecognition.addListener('partialResults', (data) => {
-                if (data && data.matches && data.matches.length > 0) {
-                    // Update the display with the latest partial result
-                    const latestPartial = data.matches[0];
-                    if (transcriptionResult) {
-                        transcriptionResult.innerHTML = `<div>${currentTranscript}<i class="interim-text">${latestPartial}</i></div>`;
-                        transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
-                    }
-                }
-            });
-
-            // Start recognition - this returns a promise that resolves with final results
-            // when the OS determines speech has ended (or on manual stop).
-            const result = await SpeechRecognition.start({
-                language: 'en-US',
-                maxResults: 1, // Get only the best match
-                prompt: "Speak now", // Optional prompt for some platforms
-                partialResults: true, // Essential for getting live feedback and using the listener
-                popup: false // Prevent default OS popup if any
-            });
-
-            // --- Promise Resolved: Recognition Ended Naturally ---            
-            console.log("Recognition ended naturally, result:", result);
-            isRecording = false; // Update state
-            updateUIForRecording(false); // Update UI
-            if(partialListener) await partialListener.remove(); // Clean up listener
-            partialListener = null;
-
-            if (result && result.matches && result.matches.length > 0) {
-                const finalTranscript = result.matches[0].trim();
-                currentTranscript = finalTranscript; // Store final version
-                if (transcriptionResult) transcriptionResult.textContent = finalTranscript;
-
-                if (finalTranscript.length > 0) {
-                    setStatus('Transcription complete. Summarizing...');
-                    if (recordButton) {
-                        recordButton.setAttribute('data-processing-summary', 'true');
-                        recordButton.disabled = true;
-                    }
-                    sendTranscriptionForSummary(finalTranscript);
-                } else {
-                    setStatus('Ready');
-                    if (transcriptionResult) transcriptionResult.innerHTML = '<i>No speech detected.</i>';
-                    if (recordButton) recordButton.disabled = false;
-                }
-            } else {
-                // Handle case where recognition ended but no matches were returned
-                setStatus('Ready');
-                showErrorMessage('Could not transcribe speech. Please try again.');
-                 if (transcriptionResult) transcriptionResult.innerHTML = '<i>No speech detected.</i>';
-                 if (recordButton) recordButton.disabled = false;
-            }
-
-        } catch (error) {
-            // --- Error During Active Recognition ---            
-            console.error('Speech recognition error:', error);
-            isRecording = false; // Ensure state is reset
-            updateUIForRecording(false);
-             if(partialListener) await partialListener.remove(); // Clean up listener on error too
-             partialListener = null;
-
-            // Provide specific feedback based on common errors if possible
-            let message = error.message || 'An unknown error occurred';
-            if (message.toLowerCase().includes('permission')) {
-                message = 'Microphone permission issue. Please check App Settings.';
-                 if (recordButton) recordButton.disabled = true;
-            } else if (message.toLowerCase().includes('timeout')) {
-                message = 'No speech detected for a while. Timed out.';
-            } else if (message.toLowerCase().includes('network')) {
-                 message = 'Network error during recognition. Check connection.';
-             } // Add more specific error checks as needed
-
-            showErrorMessage(`Recognition failed: ${message}`);
-            resetAppStateUI(); // Reset UI/button state
+          perm = await SpeechRecognition.requestPermissions();
+        } catch (e) {
+          console.error('Permission request failed:', e);
+          showErrorMessage(`Permission request failed: ${e.message || e}`);
+          return;
         }
-    }
-
+        if (perm.speechRecognition !== 'granted') {
+          showErrorMessage('Microphone permission is required to record speech.');
+          return;
+        }
+      
+        // 3) Update UI for “listening”
+        isRecording = true;
+        currentTranscript = '';
+        updateUIForRecording(true);
+        setStatus('Listening... Speak now!');
+        if (transcriptionResult) {
+          transcriptionResult.innerHTML = '<i>Listening...</i>';
+        }
+      
+        // 4) Hook up partial‐results callback
+        try {
+          partialListener = await SpeechRecognition.addListener('partialResults', data => {
+            if (data.matches?.length) {
+              const interim = data.matches[0];
+              if (transcriptionResult) {
+                transcriptionResult.innerHTML = `
+                  <div>${currentTranscript}<i class="interim-text">${interim}</i></div>
+                `;
+                transcriptionResult.scrollTop = transcriptionResult.scrollHeight;
+              }
+            }
+          });
+        } catch (e) {
+          console.warn('Could not add partialResults listener:', e);
+        }
+      
+        // 5) Actually start listening
+        let result;
+        try {
+          result = await SpeechRecognition.start({
+            language:       'en-US',
+            maxResults:     1,
+            partialResults: true,
+            popup:          false
+          });
+        } catch (e) {
+          console.error('Failed to start recognition:', e);
+          showErrorMessage(`Failed to start listening: ${e.message || e}`);
+          // clean up and reset UI
+          if (partialListener) { await partialListener.remove(); partialListener = null; }
+          isRecording = false;
+          updateUIForRecording(false);
+          return;
+        }
+      
+        // 6) Recognition ended (natural stop)
+        if (partialListener) {
+          await partialListener.remove();
+          partialListener = null;
+        }
+        isRecording = false;
+        updateUIForRecording(false);
+      
+        // 7) Process final transcript
+        if (result?.matches?.length) {
+          const finalText = result.matches[0].trim();
+          currentTranscript = finalText;
+          if (transcriptionResult) transcriptionResult.textContent = finalText;
+      
+          if (finalText) {
+            setStatus('Transcription complete. Summarizing...');
+            recordButton.setAttribute('data-processing-summary', 'true');
+            recordButton.disabled = true;
+            sendTranscriptionForSummary(finalText);
+          } else {
+            setStatus('Ready');
+            transcriptionResult.innerHTML = '<i>No speech detected.</i>';
+            recordButton.disabled = false;
+          }
+        } else {
+          // no matches returned
+          setStatus('Ready');
+          showErrorMessage('Could not transcribe speech. Please try again.');
+          transcriptionResult.innerHTML = '<i>No speech detected.</i>';
+          recordButton.disabled = false;
+        }
+      }
+      
     // --- Stop Recognition (Manual) ---
     async function stopRecognition() {
         if (!isRecording) {

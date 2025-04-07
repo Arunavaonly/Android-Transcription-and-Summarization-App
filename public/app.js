@@ -3,10 +3,6 @@ import { Capacitor } from '@capacitor/core';
 import { SpeechRecognition } from '@capacitor-community/speech-recognition';
 
 document.addEventListener('DOMContentLoaded', () => {
-    // Capacitor check - Keep this for native-specific logic or info
-    // if (!Capacitor.isNativePlatform()) { ... } // Existing check is fine
-
-    // DOM elements (ensure these IDs exist in your HTML)
     const recordButton = document.getElementById('recordButton');
     const recordButtonText = recordButton ? recordButton.querySelector('span') : null;
     const recordButtonIcon = recordButton ? recordButton.querySelector('i') : null;
@@ -14,7 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const processingStatus = document.getElementById('processingStatus'); // Shows spinner + status text
     const statusText = document.getElementById('statusText'); // Add this element in HTML
     const errorMessage = document.getElementById('errorMessage');
-    // No longer needed: const audioInfo = document.getElementById('audioInfo');
     const transcriptionResult = document.getElementById('transcriptionResult');
     const summaryResult = document.getElementById('summaryResult');
     const summaryControls = document.getElementById('summaryControls'); // Add this element in HTML
@@ -176,8 +171,6 @@ document.addEventListener('DOMContentLoaded', () => {
             // Request the plugin to stop listening
             await SpeechRecognition.stop();
             console.log("Manual stop requested.");
-            // The promise from start() should now resolve/reject, and that handler will manage the final transcript/state.
-            // Set isRecording = false will happen in the start() promise resolution/rejection handler.
         } catch (error) {
             console.error('Error stopping speech recognition:', error);
             showErrorMessage(`Failed to stop cleanly: ${error.message}`);
@@ -186,7 +179,6 @@ document.addEventListener('DOMContentLoaded', () => {
             isRecording = false;
             updateUIForRecording(false);
         } finally {
-            // Re-enable button if not already handled by the start() promise resolution/rejection
             if (!recordButton.hasAttribute('data-processing-summary')) {
                  recordButton.disabled = false;
             }
@@ -215,7 +207,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (summaryResult) summaryResult.textContent = 'Your summary will appear here';
         removeRetrySummaryButton();
         resetAppStateUI(); // Reset buttons and status
-        // No need to call resetRecognitionState as plugin state is managed differently
     }
 
     // UI toggle for recording state
@@ -223,9 +214,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!recordButton || !recordButtonText || !recordButtonIcon) return;
         if (on) {
             recordButton.classList.add('recording');
-            recordButtonText.textContent = 'Stop Listening'; // Changed text
+            recordButtonText.textContent = 'Stop Recording'; // Changed text
             recordButtonIcon.classList.replace('fa-microphone', 'fa-stop');
-            if (recordingStatus) recordingStatus.classList.add('hidden'); // Hide old status element
+            if (recordingStatus) recordingStatus.classList.remove('hidden'); // Hide old status element
         } else {
             recordButton.classList.remove('recording');
             recordButtonText.textContent = 'Start Recording';
@@ -278,8 +269,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Status set to 'Summarizing...' by caller
-        // Button disabled and marked by caller
 
         try {
             // console.log(`Sending text (length: ${text.length}) to ${API_BASE_URL}/summarize`);
@@ -399,4 +388,4 @@ document.addEventListener('DOMContentLoaded', () => {
          }
      }).catch(e => console.error("Error checking plugin availability:", e));
 
-}); // End DOMContentLoaded
+});
